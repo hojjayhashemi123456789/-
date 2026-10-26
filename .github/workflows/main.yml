@@ -1,0 +1,87 @@
+name: 24/7 Live Hot-Reload & Watchdog Bot
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - ".github/workflows/**"
+      - "**.py"
+      - "requirements.txt"
+  schedule:
+    # پشتیبان زمان‌بندی، در حالی که استارت اصلی بدون وقفه توسط گام Self Re-Trigger انجام می‌شود
+    - cron: "*/30 * * * *"
+
+permissions:
+  contents: write
+  actions: write
+
+# بدون استفاده از cancel-in-progress تا با هر ویرایش کد، سرور در صف نماند و به صورت زنده آپدیت شود
+concurrency:
+  group: drpdfmakerbot-live-runner
+  cancel-in-progress: false
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: 📥 دریافت مخزن کد (Checkout Repository)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🐍 نصب پایتون (Set up Python)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: 📦 نصب ابزارها و پیش‌نیازهای گرافیکی PDF (Install Dependencies)
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y \
+            psmisc lsof sqlite3 \
+            libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0 \
+            libffi-dev libjpeg-dev libopenjp2-7-dev
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: 🔥 اجرای ۲۴/۷ با مکانیزم ترکیبی Hot-Reload و Watchdog (ضد کرش)
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN || '8873737714:AAEjTPhIIBxBQFkHuSuILdEQ6DR0CzLmmBg' }}
+          ADMIN_ID: ${{ secrets.ADMIN_ID || '1176839639' }}
+          ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME || 'Hojjat_hshmi' }}
+          PORT: "7860"
+          DB_PATH: "consulting_bot.db"
+        run: |
+          chmod +x run_workflow.sh
+          ./run_workflow.sh
+
+      - name: 💾 ذخیره خودکار آخرین وضعیت دیتابیس قبل از تعویض سیکل (Auto-Save DB)
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f "consulting_bot.db" ]; then
+            sqlite3 consulting_bot.db "PRAGMA wal_checkpoint(TRUNCATE);" || true
+            rm -f consulting_bot.db-wal consulting_bot.db-shm
+            git config user.name "DRpdfmakerbot AutoBackup"
+            git config user.email "bot@github.com"
+            git add consulting_bot.db || true
+            if ! git diff --staged --quiet; then
+              git commit -m "💾 Auto-save database backup [skip ci]" || true
+              git pull --rebase origin "$(git rev-parse --abbrev-ref HEAD)" || true
+              git push origin HEAD || true
+            fi
+          fi
+
+      - name: 🔄 استارت خودکار سیکل بعدی بدون حتی ۱ ثانیه قطعی (Self Re-Trigger)
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🚀 در حال استارت آنی سیکل بعدی بدون وقفه..."
+          BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
+          gh workflow run "${{ github.workflow }}" --ref "$BRANCH_NAME" || gh workflow run main.yml --ref "$BRANCH_NAME"
+          echo "✅ سیکل جدید با موفقیت استارت خورد!"
