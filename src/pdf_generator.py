@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-موتور فوق‌سریع تولید فایل‌های PDF برنامه مطالعاتی دکتر هاشمی با فونت پینار (Pinar-Regular.ttf):
-۱. generate_study_plan_pdf: تولید برنامه مطالعاتی اصلی (کاور اختصاصی بدون متن تمرکز، سربرگ گرادینت با نام «برنامه دکتر [نام]» رنگی و وسط‌چین، جداول ۶ رنگ، و جدول خلاصه انتهایی با ساعت خالص و تست‌های گردشده به مضرب ۱۰).
-۲. generate_weekly_status_pdf: تولید فایل PDF جداگانه «وضعیت هفتگی» (اینفوگرافیک حرفه‌ای مشابه code_artifact (1).html با کاور صفحه اول، سربرگ برنامه و داشبورد تاریک مدرن با فونت پینار).
+موتور فوق‌سریع تولید فایل‌های PDF برنامه مطالعاتی دکتر هاشمی با فونت پینار معمولی و پینار بولد
+(Pinar-Regular.ttf + Pinar-Bold.ttf) - نسخه ۴:
+- رفع کامل کج شدن اعداد بالای نمودار میله‌ای روزانه (تراز کاملاً وسط‌چین با خود ستون)
+- رفع کامل شکستن کپسول «تسلط: ۱۰س» به خط دوم در کارت اول اینفوگرافیک
+- استفاده از فونت Pinar-Bold برای تیترها، اعداد شاخص (KPI) و سرتیترها
+- جلوگیری از شکستن کلمه «آموزش» در ستون‌های باریک جدول
 """
 
 from __future__ import annotations
@@ -21,11 +24,9 @@ from src.parser import (
     ORDINAL_DAYS as PARSER_ORDINAL_DAYS,
 )
 
-# کش سراسری در حافظه رم برای حذف خواندن تکراری دیسک و افزایش چشمگیر سرعت رندرینگ
 _ASSET_URI_CACHE: dict[str, str] = {}
 _SHARED_FONT_CONFIG = FontConfiguration()
 
-# ۶ استایل رنگی دقیقاً مطابق با Grid Table 4 - Accent 1..6 در فایل Word کاربر
 TABLE_ACCENT_STYLES = [
     {
         "name": "Accent 1 (Blue)",
@@ -77,7 +78,6 @@ TABLE_ACCENT_STYLES = [
     },
 ]
 
-# پالت رنگی دروس در اینفوگرافیک وضعیت هفتگی (مشابه code_artifact (1).html)
 SUBJECT_THEMES = [
     {"text": "#34D399", "bg": "#10B981", "badge_bg": "rgba(16, 185, 129, 0.16)", "border": "#10B981"},  # Emerald
     {"text": "#38BDF8", "bg": "#0EA5E9", "badge_bg": "rgba(14, 165, 233, 0.16)", "border": "#0EA5E9"},  # Sky
@@ -87,6 +87,11 @@ SUBJECT_THEMES = [
 ]
 
 
+def clear_asset_cache() -> None:
+    """پاکسازی کش رم در صورتی که کاربر فونت جدیدی در تلگرام آپلود کند."""
+    _ASSET_URI_CACHE.clear()
+
+
 def _get_cached_data_uri(path: Path, mime: str) -> str:
     key = str(path.resolve())
     if key not in _ASSET_URI_CACHE:
@@ -94,6 +99,17 @@ def _get_cached_data_uri(path: Path, mime: str) -> str:
         b64 = base64.b64encode(data).decode("ascii")
         _ASSET_URI_CACHE[key] = f"data:{mime};base64,{b64}"
     return _ASSET_URI_CACHE[key]
+
+
+def _get_font_uris(assets_dir: Path) -> tuple[str, str]:
+    reg_path = assets_dir / "Pinar-Regular.ttf"
+    bold_path = assets_dir / "Pinar-Bold.ttf"
+    reg_uri = _get_cached_data_uri(reg_path, "font/ttf")
+    if bold_path.exists():
+        bold_uri = _get_cached_data_uri(bold_path, "font/ttf")
+    else:
+        bold_uri = reg_uri
+    return reg_uri, bold_uri
 
 
 def _enrich_day_title_with_date(raw_title: str, day_idx: int, date_info: dict | None) -> str:
@@ -120,8 +136,8 @@ def build_study_plan_html(
     include_summary: bool = True,
     sync_weekday_names: bool = True,
 ) -> str:
-    """ساخت کد HTML/CSS برنامه مطالعاتی اصلی با تمام اصلاحات نسخه ۲."""
-    font_uri = _get_cached_data_uri(assets_dir / "Pinar-Regular.ttf", "font/ttf")
+    """ساخت کد HTML/CSS برنامه مطالعاتی اصلی با فونت Pinar-Regular و Pinar-Bold."""
+    font_reg_uri, font_bold_uri = _get_font_uris(assets_dir)
     cover_uri = _get_cached_data_uri(assets_dir / "cover_bg.jpg", "image/jpeg")
     cal_uri = _get_cached_data_uri(assets_dir / "calendar_icon.png", "image/png")
 
@@ -131,7 +147,6 @@ def build_study_plan_html(
     start_full = html.escape(date_info.get("start_full", ""))
     end_full = html.escape(date_info.get("end_full", ""))
 
-    # خط دوم باکس روی کاور: بدون بخش «تمرکز: پیشروی + تسلط حداکثری»
     if end_full and not end_full.startswith("برنامه"):
         cover_line_2 = f"شروع برنامه: {start_full} تا {end_full}"
     else:
@@ -150,7 +165,7 @@ def build_study_plan_html(
         else:
             day_title = to_persian_digits(day.get("title", f"روز {idx + 1}"))
 
-        start_time = html.escape(to_persian_digits(day.get("start_time", "۸:۱۵")))
+        start_time = html.escape(to_persian_digits(day.get("start_time", "۰۸:۰۰")))
         total_hours = html.escape(to_persian_digits(day.get("total_hours", "")))
 
         colgroup_html = "".join(f'<col style="width: {pct}%;" />' for pct in col_pcts)
@@ -159,14 +174,23 @@ def build_study_plan_html(
             for h in headers
         )
 
+        # تشخیص ستون‌های کوتاه که نباید وسط کلمه بشکنند (پارت، درس، نوع پارت، مدت زمان، تعداد تست، بازه)
+        nowrap_cols = set()
+        for c_i, h_txt in enumerate(headers):
+            if any(k in h_txt for k in ["پارت", "درس", "نوع", "مدت", "تست", "بازه"]) and "منبع" not in h_txt and "مبحث" not in h_txt:
+                nowrap_cols.add(c_i)
+
         rows_html_list: list[str] = []
         for r_idx, row in enumerate(day.get("rows", [])):
             row_bg = accent["even_bg"] if (r_idx % 2 == 0) else accent["odd_bg"]
-            tds = "".join(
-                f'<td style="background-color: {row_bg}; border: 1px solid {accent["border"]};">{html.escape(str(cell))}</td>'
-                for cell in row
-            )
-            rows_html_list.append(f"<tr>{tds}</tr>")
+            tds = []
+            for c_i, cell in enumerate(row):
+                cell_str = str(cell)
+                nw_style = "white-space: nowrap;" if (c_i in nowrap_cols and len(cell_str) <= 14) else ""
+                tds.append(
+                    f'<td style="background-color: {row_bg}; border: 1px solid {accent["border"]}; {nw_style}">{html.escape(cell_str)}</td>'
+                )
+            rows_html_list.append(f"<tr>{''.join(tds)}</tr>")
 
         rows_html = "\n".join(rows_html_list)
 
@@ -190,11 +214,6 @@ def build_study_plan_html(
         """
         days_html_parts.append(day_block)
 
-    # جدول انتهای برنامه:
-    # - بدون خط‌چین و بدون تیتر «خلاصه آماری برنامه (۷ روزه)»
-    # - نگه داشتن خط «مجموع کل مطالعه: ... ساعت | مجموع کل تست: ... تست»
-    # - نمایش ساعت مطالعه هر درس فقط به ساعت (بدون دقیقه)
-    # - گرد کردن اعداد تست به مضرب ۱۰
     summary_html = ""
     summary = plan_data.get("summary", {})
     if include_summary and summary.get("total_minutes", 0) > 0:
@@ -207,13 +226,15 @@ def build_study_plan_html(
         for s_idx, (subj_name, mins) in enumerate(
             sorted(subj_mins.items(), key=lambda x: x[1], reverse=True)
         ):
+            if mins <= 0:
+                continue
             hrs_fa = f"{format_hours_clean(mins)} ساعت"
             tst_rounded = round_to_nearest_10(subj_tests.get(subj_name, 0))
             tst_fa = to_persian_digits(tst_rounded)
             bg = "#E2EFDA" if s_idx % 2 == 0 else "#FFFFFF"
             subj_rows.append(
                 f'<tr>'
-                f'<td style="background:{bg}; border:1px solid #A8D08D; font-weight:bold;">{html.escape(subj_name)}</td>'
+                f'<td style="background:{bg}; border:1px solid #A8D08D; font-weight:700;">{html.escape(subj_name)}</td>'
                 f'<td style="background:{bg}; border:1px solid #A8D08D;">{hrs_fa}</td>'
                 f'<td style="background:{bg}; border:1px solid #A8D08D;">{tst_fa} تست</td>'
                 f'</tr>'
@@ -222,7 +243,7 @@ def build_study_plan_html(
         summary_html = f"""
         <div class="day-section summary-box">
           <div class="day-meta">
-            <div class="day-start" style="font-weight: bold; font-size: 9.2pt; color: #1A1A1A; margin-bottom: 5px;">
+            <div class="day-start" style="font-weight: 700; font-size: 9.2pt; color: #1A1A1A; margin-bottom: 5px;">
               مجموع کل مطالعه: {tot_hrs_fa} ساعت | مجموع کل تست: {tot_tests_fa} تست
             </div>
           </div>
@@ -253,14 +274,20 @@ def build_study_plan_html(
   <style>
     @font-face {{
       font-family: 'Pinar';
-      src: url('{font_uri}') format('truetype');
-      font-weight: normal;
+      src: url('{font_reg_uri}') format('truetype');
+      font-weight: 400;
       font-style: normal;
     }}
     @font-face {{
       font-family: 'Pinar';
-      src: url('{font_uri}') format('truetype');
-      font-weight: bold;
+      src: url('{font_bold_uri}') format('truetype');
+      font-weight: 700;
+      font-style: normal;
+    }}
+    @font-face {{
+      font-family: 'Pinar';
+      src: url('{font_bold_uri}') format('truetype');
+      font-weight: 900;
       font-style: normal;
     }}
 
@@ -294,11 +321,10 @@ def build_study_plan_html(
       direction: rtl;
       text-align: right;
       color: #1A1A1A;
-      font-size: 9.5pt;
+      font-size: 9.2pt;
       line-height: 1.45;
     }}
 
-    /* ۱. صفحه اول (کاور اختصاصی دکتر هاشمی + باکس مشخصات پایین کاور) */
     .cover-page {{
       position: relative;
       width: 210mm;
@@ -334,7 +360,7 @@ def build_study_plan_html(
 
     .cover-badge-title {{
       font-size: 16.5pt;
-      font-weight: bold;
+      font-weight: 700;
       color: #06396B;
       margin-bottom: 5px;
       line-height: 1.35;
@@ -342,12 +368,11 @@ def build_study_plan_html(
 
     .cover-badge-subtitle {{
       font-size: 11pt;
-      font-weight: bold;
+      font-weight: 700;
       color: #D9531E;
       line-height: 1.35;
     }}
 
-    /* ۲. سربرگ گرادینت با فونت بزرگ‌تر، رنگی و کاملاً وسط‌چین در هر دو سمت */
     .running-header {{
       position: running(running-header);
       width: 194mm;
@@ -373,17 +398,15 @@ def build_study_plan_html(
 
     .header-student-pill {{
       font-size: 11.8pt;
-      font-weight: bold;
+      font-weight: 700;
       color: #FFF799;
-      text-shadow: 0 1px 3px rgba(6, 40, 75, 0.6);
       white-space: nowrap;
     }}
 
     .header-date-pill {{
       font-size: 11pt;
-      font-weight: bold;
+      font-weight: 700;
       color: #FFFFFF;
-      text-shadow: 0 1px 3px rgba(6, 40, 75, 0.5);
       white-space: nowrap;
     }}
 
@@ -410,7 +433,6 @@ def build_study_plan_html(
       direction: ltr;
     }}
 
-    /* ۳. استایل بخش‌های روزانه و جدول‌ها */
     .day-section {{
       margin-bottom: 10px;
       page-break-inside: avoid;
@@ -424,7 +446,7 @@ def build_study_plan_html(
 
     .day-title {{
       font-size: 10pt;
-      font-weight: bold;
+      font-weight: 700;
       color: #111111;
       margin-bottom: 1px;
     }}
@@ -443,19 +465,19 @@ def build_study_plan_html(
     }}
 
     .study-table th {{
-      font-size: 8.8pt;
-      font-weight: bold;
+      font-size: 8.6pt;
+      font-weight: 700;
       text-align: center;
       vertical-align: middle;
-      padding: 5px 4px;
+      padding: 5px 3px;
       line-height: 1.3;
     }}
 
     .study-table td {{
-      font-size: 8.5pt;
+      font-size: 8.3pt;
       text-align: center;
       vertical-align: middle;
-      padding: 5px 4px;
+      padding: 5px 3px;
       line-height: 1.35;
       color: #111111;
       word-wrap: break-word;
@@ -463,7 +485,7 @@ def build_study_plan_html(
 
     .day-total {{
       font-size: 8.8pt;
-      font-weight: bold;
+      font-weight: 700;
       color: #111111;
       text-align: right;
       margin-top: 2px;
@@ -477,7 +499,6 @@ def build_study_plan_html(
   </style>
 </head>
 <body>
-  <!-- صفحه اول: کاور اختصاصی دکتر هاشمی به همراه باکس مشخصات -->
   <div class="cover-page">
     <img class="cover-bg" src="{cover_uri}" alt="Cover" />
     <div class="cover-badge-box">
@@ -486,7 +507,6 @@ def build_study_plan_html(
     </div>
   </div>
 
-  <!-- سربرگ تکرارشونده صفحات داخلی -->
   <div class="running-header">
     <table class="header-banner">
       <tr>
@@ -503,12 +523,10 @@ def build_study_plan_html(
     </table>
   </div>
 
-  <!-- پاورقی تکرارشونده صفحات داخلی -->
   <div class="running-footer">
     The only easy day was yesterday!
   </div>
 
-  <!-- محتوای جداول روزانه -->
   <main>
     {"".join(days_html_parts)}
     {summary_html}
@@ -526,12 +544,11 @@ def build_weekly_status_html(
     assets_dir: Path,
 ) -> str:
     """
-    ساخت HTML/CSS فایل PDF جداگانه «وضعیت هفتگی» (اینفوگرافیک برنامه مطالعاتی):
-    - صفحه اول: کاور اختصاصی دکتر هاشمی + باکس مشخصات پایین کاور
-    - صفحه دوم: سربرگ گرادینت (برنامه دکتر [نام] + تاریخ) و داشبورد اینفوگرافیک فوق‌حرفه‌ای
-      دقیقاً مطابق با طراحی code_artifact (1).html و با فونت پینار.
+    ساخت HTML/CSS فایل PDF جداگانه «وضعیت هفتگی» (اینفوگرافیک برنامه مطالعاتی) با فونت Pinar-Regular + Pinar-Bold:
+    - تراز صددرصدی اعداد بالای ستون‌های نمودار روزانه دقیقاً در مرکز هر ستون
+    - قرارگیری هر ۳ کپسول «میانگین»، «آموزش» و «تسلط» در یک ردیف افقی بدون شکستن به خط بعد
     """
-    font_uri = _get_cached_data_uri(assets_dir / "Pinar-Regular.ttf", "font/ttf")
+    font_reg_uri, font_bold_uri = _get_font_uris(assets_dir)
     cover_uri = _get_cached_data_uri(assets_dir / "cover_bg.jpg", "image/jpeg")
     cal_uri = _get_cached_data_uri(assets_dir / "calendar_icon.png", "image/png")
 
@@ -548,7 +565,6 @@ def build_weekly_status_html(
 
     summary = plan_data.get("summary", {})
     total_mins = summary.get("total_minutes", 0)
-    total_hrs_clean = format_hours_clean(total_mins)
     hrs_int = total_mins // 60
     rem_mins = total_mins % 60
     if rem_mins > 0:
@@ -559,13 +575,11 @@ def build_weekly_status_html(
     avg_hrs_fa = to_persian_digits(f"{summary.get('avg_daily_hours', 0):g}")
     total_parts_fa = to_persian_digits(summary.get("total_parts", 0))
 
-    # هدف‌گذاری تعداد تست به صورت بازه مضرب ۱۰ (مثلاً ۲۵۰ تا ۲۷۰ تست)
     rounded_tests = round_to_nearest_10(summary.get("total_tests", 0))
     low_t = max(10, rounded_tests - 10)
     high_t = rounded_tests + 10
     test_range_fa = f"{to_persian_digits(low_t)} تا {to_persian_digits(high_t)} تست"
 
-    # آمار انواع پارت (آموزش، تسلط، مرور)
     pt_mins = summary.get("part_type_minutes", {"آموزش": 0, "تسلط": 0, "مرور": 0})
     pt_counts = summary.get("part_type_counts", {"آموزش": 0, "تسلط": 0, "مرور": 0})
 
@@ -586,11 +600,12 @@ def build_weekly_status_html(
     master_cnt_fa = to_persian_digits(pt_counts.get("تسلط", 0))
     review_cnt_fa = to_persian_digits(pt_counts.get("مرور", 0))
 
-    # لیست دروس مرتب‌شده بر اساس زمان مطالعه
     subj_mins: dict[str, int] = summary.get("subject_minutes", {})
     subj_tests: dict[str, int] = summary.get("subject_tests", {})
     subj_topics: dict[str, list[str]] = summary.get("subject_topics", {})
-    sorted_subjects = sorted(subj_mins.items(), key=lambda x: x[1], reverse=True)
+    sorted_subjects = [
+        (k, v) for k, v in sorted(subj_mins.items(), key=lambda x: x[1], reverse=True) if v > 0
+    ]
 
     subject_progress_rows = []
     for idx, (s_name, s_min) in enumerate(sorted_subjects[:6]):
@@ -606,10 +621,10 @@ def build_weekly_status_html(
             <div class="subj-row">
               <table class="subj-row-tbl">
                 <tr>
-                  <td style="text-align:right; color:{theme['text']}; font-weight:bold;">
+                  <td style="text-align:right; color:{theme['text']}; font-weight:700;">
                     {rank_fa}. {html.escape(s_name)} ({pct_fa}٪ برنامه)
                   </td>
-                  <td style="text-align:left; color:#E2E8F0; font-weight:bold;">
+                  <td style="text-align:left; color:#E2E8F0; font-weight:700;">
                     {s_hrs_fa} ساعت | {s_tst_fa} تست
                   </td>
                 </tr>
@@ -621,21 +636,25 @@ def build_weekly_status_html(
             """
         )
 
-    # نمودار روند ساعت مطالعه روزانه
+    # نمودار روند ساعت مطالعه روزانه:
+    # قرار دادن عدد ساعت و ستون رنگی در یک باکس واحد با عرض ثابت (۲۴ پیکسل) و margin: 0 auto
+    # تا عدد هر روز دقیقاً در وسط بالای ستون همان روز قرار بگیرد و هرگز کج نشود!
     daily_stats = summary.get("daily_stats", [])
     max_day_hrs = max([d.get("hours", 1.0) for d in daily_stats] + [8.0])
     bar_cols_html = []
     for d_idx, d_stat in enumerate(daily_stats):
         h_val = d_stat.get("hours", 0.0)
-        bar_px = int(round((h_val / max_day_hrs) * 105))
-        bar_px = max(18, min(115, bar_px))
+        bar_px = int(round((h_val / max_day_hrs) * 105)) if h_val > 0 else 6
+        bar_px = max(6, min(115, bar_px))
         bar_color = "#38BDF8" if d_idx < 4 else ("#818CF8" if d_idx < 6 else "#34D399")
 
         bar_cols_html.append(
             f"""
             <td class="chart-col">
-              <div class="bar-num" style="color: {bar_color};">{html.escape(d_stat.get('hours_fa', ''))}</div>
-              <div class="bar-pillar" style="height: {bar_px}px; background: {bar_color};"></div>
+              <div class="bar-unit">
+                <div class="bar-num" style="color: {bar_color};">{html.escape(d_stat.get('hours_fa', ''))}</div>
+                <div class="bar-pillar" style="height: {bar_px}px; background: {bar_color};"></div>
+              </div>
             </td>
             """
         )
@@ -668,10 +687,10 @@ def build_weekly_status_html(
               <div class="topic-card" style="border-top: 3.5px solid {theme['border']};">
                 <table class="topic-card-hdr-tbl">
                   <tr>
-                    <td style="text-align:right; width:58%;">
+                    <td style="text-align:right; width:56%;">
                       <span class="topic-card-title" style="color: {theme['text']};">{html.escape(s_name)}</span>
                     </td>
-                    <td style="text-align:left; width:42%;">
+                    <td style="text-align:left; width:44%;">
                       <span class="topic-card-badge" style="background: {theme['badge_bg']}; color: {theme['text']};">{s_hrs_fa} ساعت</span>
                     </td>
                   </tr>
@@ -684,6 +703,17 @@ def build_weekly_status_html(
             """
         )
 
+    # ساخت سگمنت‌های نوار توزیع زمان (حذف سگمنت‌های صفر درصد تا نوار تمیز بماند)
+    bar_segs_html = []
+    if learn_pct > 0:
+        bar_segs_html.append(f'<td style="width: {learn_pct}%; height: 10px; background:#0EA5E9;"></td>')
+    if master_pct > 0:
+        bar_segs_html.append(f'<td style="width: {master_pct}%; height: 10px; background:#F59E0B;"></td>')
+    if review_pct > 0:
+        bar_segs_html.append(f'<td style="width: {review_pct}%; height: 10px; background:#10B981;"></td>')
+    if not bar_segs_html:
+        bar_segs_html.append('<td style="width: 100%; height: 10px; background:#0EA5E9;"></td>')
+
     html_doc = f"""<!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
@@ -691,20 +721,26 @@ def build_weekly_status_html(
   <style>
     @font-face {{
       font-family: 'Pinar';
-      src: url('{font_uri}') format('truetype');
-      font-weight: normal;
+      src: url('{font_reg_uri}') format('truetype');
+      font-weight: 400;
       font-style: normal;
     }}
     @font-face {{
       font-family: 'Pinar';
-      src: url('{font_uri}') format('truetype');
-      font-weight: bold;
+      src: url('{font_bold_uri}') format('truetype');
+      font-weight: 700;
+      font-style: normal;
+    }}
+    @font-face {{
+      font-family: 'Pinar';
+      src: url('{font_bold_uri}') format('truetype');
+      font-weight: 900;
       font-style: normal;
     }}
 
     @page {{
       size: A4 portrait;
-      margin: 24mm 7mm 14mm 7mm;
+      margin: 24mm 6.5mm 14mm 6.5mm;
       background-color: #090D16;
       @top-center {{
         content: element(running-header);
@@ -737,7 +773,6 @@ def build_weekly_status_html(
       font-size: 9pt;
     }}
 
-    /* صفحه اول: کاور */
     .cover-page {{
       position: relative;
       width: 210mm;
@@ -774,7 +809,7 @@ def build_weekly_status_html(
 
     .cover-badge-title {{
       font-size: 16.5pt;
-      font-weight: bold;
+      font-weight: 700;
       color: #06396B;
       margin-bottom: 5px;
       line-height: 1.35;
@@ -782,21 +817,20 @@ def build_weekly_status_html(
 
     .cover-badge-subtitle {{
       font-size: 11pt;
-      font-weight: bold;
+      font-weight: 700;
       color: #D9531E;
       line-height: 1.35;
     }}
 
-    /* سربرگ گرادینت در صفحه وضعیت هفتگی */
     .running-header {{
       position: running(running-header);
-      width: 196mm;
+      width: 197mm;
       margin: 0 auto;
       padding-top: 3mm;
     }}
 
     .header-banner {{
-      width: 196mm;
+      width: 197mm;
       height: 15mm;
       border-radius: 9px;
       background: linear-gradient(90deg, #4B9CD3 0%, #3BB29B 50%, #5ECF95 100%);
@@ -805,7 +839,7 @@ def build_weekly_status_html(
     }}
 
     .header-side {{
-      width: 82mm;
+      width: 82.5mm;
       vertical-align: middle;
       text-align: center;
       padding: 0 4mm;
@@ -813,17 +847,15 @@ def build_weekly_status_html(
 
     .header-student-pill {{
       font-size: 11.8pt;
-      font-weight: bold;
+      font-weight: 700;
       color: #FFF799;
-      text-shadow: 0 1px 3px rgba(6, 40, 75, 0.6);
       white-space: nowrap;
     }}
 
     .header-date-pill {{
       font-size: 11pt;
-      font-weight: bold;
+      font-weight: 700;
       color: #FFFFFF;
-      text-shadow: 0 1px 3px rgba(6, 40, 75, 0.5);
       white-space: nowrap;
     }}
 
@@ -850,7 +882,6 @@ def build_weekly_status_html(
       direction: ltr;
     }}
 
-    /* داشبورد اینفوگرافیک (تاریک و مدرن مطابق code_artifact) */
     .dashboard-wrap {{
       width: 100%;
       padding-top: 2mm;
@@ -865,38 +896,47 @@ def build_weekly_status_html(
 
     .premium-card {{
       background: linear-gradient(145deg, #161F33 0%, #0F1626 100%);
-      border: 1px solid rgba(255, 255, 255, 0.10);
+      border: 1px solid rgba(255, 255, 255, 0.11);
       border-radius: 16px;
-      padding: 12px 14px;
+      padding: 12px 13px;
       vertical-align: top;
     }}
 
     .kpi-label {{
-      font-size: 8.2pt;
+      font-size: 8.3pt;
       color: #94A3B8;
-      margin-bottom: 4px;
+      margin-bottom: 5px;
     }}
 
     .kpi-value {{
-      font-size: 14.5pt;
-      font-weight: bold;
-      margin-bottom: 8px;
+      font-size: 15pt;
+      font-weight: 700;
+      margin-bottom: 9px;
       line-height: 1.25;
     }}
 
     .kpi-footer {{
       border-top: 1px solid #1E293B;
       padding-top: 7px;
-      font-size: 7.4pt;
+      font-size: 7.2pt;
       color: #CBD5E1;
     }}
 
-    .kpi-badge {{
-      display: inline-block;
-      padding: 2px 6px;
+    .kpi-badges-tbl {{
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 3px 0;
+      margin: 0 -3px;
+    }}
+
+    .kpi-badges-tbl td {{
+      text-align: center;
+      vertical-align: middle;
+      padding: 2.5px 4px;
       border-radius: 6px;
-      margin-left: 3px;
-      font-weight: bold;
+      font-size: 6.9pt;
+      font-weight: 700;
+      white-space: nowrap;
     }}
 
     .prog-track {{
@@ -912,43 +952,34 @@ def build_weekly_status_html(
       border-radius: 99px;
     }}
 
-    /* بخش میانی: توزیع زمان و نمودار ستونی */
     .sec-title {{
       font-size: 10.2pt;
-      font-weight: bold;
+      font-weight: 700;
       color: #FFFFFF;
       margin-bottom: 8px;
     }}
 
     .part-dist-labels {{
       width: 100%;
-      font-size: 7.5pt;
-      font-weight: bold;
+      font-size: 7.4pt;
+      font-weight: 700;
       margin-bottom: 5px;
+    }}
+
+    .stacked-bar-wrap {{
+      width: 100%;
+      height: 10px;
+      background-color: #1E293B;
+      border-radius: 99px;
+      overflow: hidden;
+      margin-bottom: 10px;
     }}
 
     .stacked-bar {{
       width: 100%;
       height: 10px;
-      background-color: #1E293B;
-      border-radius: 99px;
       border-collapse: collapse;
       table-layout: fixed;
-      margin-bottom: 10px;
-    }}
-
-    .stacked-seg-r {{
-      height: 10px;
-      border-radius: 0 99px 99px 0;
-    }}
-
-    .stacked-seg-m {{
-      height: 10px;
-    }}
-
-    .stacked-seg-l {{
-      height: 10px;
-      border-radius: 99px 0 0 99px;
     }}
 
     .subj-row {{
@@ -962,32 +993,43 @@ def build_weekly_status_html(
       margin-bottom: 3px;
     }}
 
-    /* نمودار میله‌ای روزانه */
+    /* نمودار میله‌ای روزانه با تراز کاملاً متقارن و صاف */
     .chart-table {{
       width: 100%;
       border-collapse: collapse;
       table-layout: fixed;
       margin-top: 12px;
+      direction: rtl;
     }}
 
     .chart-col {{
       height: 145px;
       vertical-align: bottom;
       text-align: center;
-      padding: 0 3px;
+      padding: 0 2px;
       border-bottom: 1px solid #1E293B;
     }}
 
+    .bar-unit {{
+      width: 100%;
+      text-align: center;
+    }}
+
     .bar-num {{
-      font-size: 7.6pt;
-      font-weight: bold;
+      display: block;
+      width: 100%;
+      text-align: center;
+      font-size: 7.8pt;
+      font-weight: 700;
       margin-bottom: 4px;
+      line-height: 1.1;
     }}
 
     .bar-pillar {{
+      display: inline-block;
       width: 22px;
       border-radius: 7px 7px 0 0;
-      margin: 0 auto;
+      vertical-align: bottom;
     }}
 
     .bar-day {{
@@ -995,10 +1037,9 @@ def build_weekly_status_html(
       color: #94A3B8;
       padding-top: 6px;
       text-align: center;
-      font-weight: bold;
+      font-weight: 700;
     }}
 
-    /* کارت‌های مباحث دروس در پایین */
     .topic-card-cell {{
       vertical-align: top;
     }}
@@ -1025,14 +1066,14 @@ def build_weekly_status_html(
 
     .topic-card-title {{
       font-size: 8.8pt;
-      font-weight: bold;
+      font-weight: 700;
       white-space: nowrap;
     }}
 
     .topic-card-badge {{
       display: inline-block;
       font-size: 6.8pt;
-      font-weight: bold;
+      font-weight: 700;
       padding: 1.5px 5px;
       border-radius: 5px;
       white-space: nowrap;
@@ -1060,7 +1101,6 @@ def build_weekly_status_html(
   </style>
 </head>
 <body>
-  <!-- صفحه اول: کاور اختصاصی دکتر هاشمی -->
   <div class="cover-page">
     <img class="cover-bg" src="{cover_uri}" alt="Cover" />
     <div class="cover-badge-box">
@@ -1069,7 +1109,6 @@ def build_weekly_status_html(
     </div>
   </div>
 
-  <!-- سربرگ صفحه وضعیت هفتگی -->
   <div class="running-header">
     <table class="header-banner">
       <tr>
@@ -1090,22 +1129,25 @@ def build_weekly_status_html(
     The only easy day was yesterday!
   </div>
 
-  <!-- داشبورد وضعیت هفتگی در یک صفحه A4 -->
   <div class="dashboard-wrap">
-    <!-- ردیف اول: ۳ کارت KPI -->
+    <!-- ردیف اول: ۳ کارت KPI (کپسول‌های کارت اول در یک جدول ۳ ستونی بدون شکست خط) -->
     <table class="layout-table">
       <tr>
-        <td class="premium-card" style="width: 36%;">
+        <td class="premium-card" style="width: 37%;">
           <div class="kpi-label">مجموع ساعت مطالعه</div>
           <div class="kpi-value" style="color: #FFFFFF;">{total_hrs_verbose}</div>
           <div class="kpi-footer">
-            <span class="kpi-badge" style="background:#1E293B; color:#E2E8F0;">میانگین: {avg_hrs_fa} ساعت</span>
-            <span class="kpi-badge" style="background:rgba(14,165,233,0.15); color:#38BDF8;">آموزش: {learn_hrs_fa}س</span>
-            <span class="kpi-badge" style="background:rgba(245,158,11,0.15); color:#FBBF24;">تسلط: {master_hrs_fa}س</span>
+            <table class="kpi-badges-tbl">
+              <tr>
+                <td style="background:#1E293B; color:#E2E8F0; border:1px solid rgba(148,163,184,0.2);">میانگین: {avg_hrs_fa}س</td>
+                <td style="background:rgba(14,165,233,0.15); color:#38BDF8; border:1px solid rgba(14,165,233,0.25);">آموزش: {learn_hrs_fa}س</td>
+                <td style="background:rgba(245,158,11,0.15); color:#FBBF24; border:1px solid rgba(245,158,11,0.25);">تسلط: {master_hrs_fa}س</td>
+              </tr>
+            </table>
           </div>
         </td>
 
-        <td class="premium-card" style="width: 32%;">
+        <td class="premium-card" style="width: 31.5%;">
           <div class="kpi-label">هدف‌گذاری تعداد تست</div>
           <div class="kpi-value" style="color: #34D399;">{test_range_fa}</div>
           <div class="kpi-footer" style="padding-top: 11px;">
@@ -1115,13 +1157,13 @@ def build_weekly_status_html(
           </div>
         </td>
 
-        <td class="premium-card" style="width: 32%;">
+        <td class="premium-card" style="width: 31.5%;">
           <div class="kpi-label">تعداد پارت‌های اجرایی</div>
           <div class="kpi-value" style="color: #C084FC;">{total_parts_fa} پارت</div>
-          <div class="kpi-footer">
-            <span style="color:#38BDF8; font-weight:bold;">{learn_cnt_fa} آموزش</span> •
-            <span style="color:#FBBF24; font-weight:bold;">{master_cnt_fa} تسلط</span> •
-            <span style="color:#34D399; font-weight:bold;">{review_cnt_fa} مرور</span>
+          <div class="kpi-footer" style="text-align:center; white-space:nowrap;">
+            <span style="color:#38BDF8; font-weight:700;">{learn_cnt_fa} آموزش</span> •
+            <span style="color:#FBBF24; font-weight:700;">{master_cnt_fa} تسلط</span> •
+            <span style="color:#34D399; font-weight:700;">{review_cnt_fa} مرور</span>
           </div>
         </td>
       </tr>
@@ -1139,13 +1181,13 @@ def build_weekly_status_html(
             &nbsp;|&nbsp;
             <span style="color:#34D399;">مرور: {review_hrs_fa}س ({to_persian_digits(review_pct)}٪)</span>
           </div>
-          <table class="stacked-bar">
-            <tr>
-              <td class="stacked-seg-r" style="width: {max(5, learn_pct)}%; background:#0EA5E9;"></td>
-              <td class="stacked-seg-m" style="width: {max(5, master_pct)}%; background:#F59E0B;"></td>
-              <td class="stacked-seg-l" style="width: {max(4, review_pct)}%; background:#10B981;"></td>
-            </tr>
-          </table>
+          <div class="stacked-bar-wrap">
+            <table class="stacked-bar">
+              <tr>
+                {"".join(bar_segs_html)}
+              </tr>
+            </table>
+          </div>
           <div style="border-top: 1px solid #1E293B; margin: 8px 0;"></div>
           {"".join(subject_progress_rows)}
         </td>
@@ -1153,11 +1195,11 @@ def build_weekly_status_html(
         <td class="premium-card" style="width: 55%;">
           <table style="width:100%; border-collapse:collapse; margin-bottom:6px;">
             <tr>
-              <td style="text-align:right; font-size:10.2pt; font-weight:bold; color:#FFFFFF;">
+              <td style="text-align:right; font-size:10.2pt; font-weight:700; color:#FFFFFF;">
                 نمودار روند ساعت مطالعه روزانه
               </td>
               <td style="text-align:left;">
-                <span style="font-size:8pt; font-weight:bold; background:#1E293B; color:#CBD5E1; padding:2px 8px; border-radius:8px;">
+                <span style="font-size:8pt; font-weight:700; background:#1E293B; color:#CBD5E1; padding:2px 8px; border-radius:8px;">
                   {total_hrs_verbose}
                 </span>
               </td>
@@ -1197,7 +1239,6 @@ def generate_study_plan_pdf(
     include_summary: bool = True,
     sync_weekday_names: bool = True,
 ) -> Path:
-    """تولید سریع فایل PDF برنامه مطالعاتی اصلی با کش حافظه."""
     if assets_dir is None:
         assets_dir = Path(__file__).resolve().parent.parent / "assets"
     else:
@@ -1228,7 +1269,6 @@ def generate_weekly_status_pdf(
     output_path: str | Path,
     assets_dir: str | Path | None = None,
 ) -> Path:
-    """تولید سریع فایل PDF جداگانه «وضعیت هفتگی» (اینفوگرافیک) با فونت پینار."""
     if assets_dir is None:
         assets_dir = Path(__file__).resolve().parent.parent / "assets"
     else:

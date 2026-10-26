@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-ربات تلگرام تبدیل برنامه‌های مطالعاتی جمینای به PDF اختصاصی دکتر هاشمی (@DRpdfmakerbot) - نسخه ۳
-ویژگی‌های نسخه ۳ (اصلاح کامل ترتیب مراحل و کیبورد دوگانه):
-۱. کیبورد دائمی پایین صفحه (ReplyKeyboardMarkup) برای منوهای اصلی + دکمه‌های شیشه‌ای (InlineKeyboardMarkup) زیر هر پیام برای مراحل برنامه و دکمه بازگشت.
-۲. مرحله اول (بلافاصله پس از ارسال متن برنامه): تشخیص خودکار تعداد روزهای برنامه و پرسیدن «این برنامه از کی چیده بشه؟» (از امروز / از فردا / از شنبه آینده / تاریخ دلخواه) با دکمه‌های شیشه‌ای.
-۳. مرحله دوم (پس از انتخاب تاریخ): پرسیدن «اسم این دانش‌آموز چیه؟» با نمایش ۲ ستونی دکمه‌های شیشه‌ای دانش‌آموزان (مشابه اسکرین‌شات ارسالی) یا تایپ مستقیم نام، به همراه تنظیم خودکار نام فایل خروجی به صورت «برنامه دکتر [نام دانش‌آموز] - [تاریخ روز اول].pdf» و دکمه بازگشت به مرحله تاریخ.
-۴. مرحله سوم (پس از انتخاب دانش‌آموز): پرسیدن «آیا می‌خوای خروجی دوم (وضعیت هفتگی / اینفوگرافیک) رو هم بهت بدم یا فقط همین یه خروجی کافیه؟» با دکمه‌های شیشه‌ای و دکمه بازگشت به مرحله انتخاب دانش‌آموز.
+ربات تلگرام تبدیل برنامه‌های مطالعاتی جمینای به PDF اختصاصی دکتر هاشمی (@DRpdfmakerbot) - نسخه ۴ نهایی
+ویژگی‌های نسخه ۴:
+۱. پشتیبانی کامل از کپی مستقیم (عمودی / خط‌به‌خط) جدول از مرورگر جمینای در تلگرام (رفع کامل خطای ویدیوی Rec 0035.mp4) + پشتیبانی از جداول مارک‌داون و Tab.
+۲. ارسال فایل‌های PDF نهایی کاملاً بدون کپشن (caption="") و بدون دکمه زیر فایل تا مشاور بتواند فایل را مستقیماً برای دانش‌آموز فوروارد کند.
+۳. پشتیبانی از فونت Pinar-Regular.ttf و Pinar-Bold.ttf (به همراه امکان آپلود مستقیم فایل فونت جدید .ttf در چت بات برای جایگزینی آنی فونت بولد یا معمولی).
+۴. ترتیب ۳ مرحله‌ای دقیق: (۱) انتخاب تاریخ شروع با دکمه‌های شیشه‌ای -> (۲) انتخاب نام دانش‌آموز با دکمه‌های شیشه‌ای ۲ ستونی -> (۳) انتخاب دریافت یا عدم دریافت خروجی دوم (وضعیت هفتگی / اینفوگرافیک).
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from src.jalali import (
 from src.parser import format_doctor_student_title, parse_study_plan
 from src.pdf_generator import (
     _get_cached_data_uri,
+    clear_asset_cache,
     generate_study_plan_pdf,
     generate_weekly_status_pdf,
 )
@@ -44,7 +45,6 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", DEFAULT_BOT_TOKEN).strip() or DEFAULT_BO
 DB_PATH = os.environ.get("DB_PATH", "consulting_bot.db")
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 
-# دکمه‌های منوی اصلی در پایین صفحه تلگرام (ReplyKeyboardMarkup)
 BTN_NEW_PLAN = "🎯📅 برنامه درسی دوره‌ای (ارسال برنامه جدید)"
 BTN_STUDENTS = "👥 مدیریت و مشاهده لیست دانش‌آموزان"
 BTN_ADD_STUDENT = "🟢👤 افزودن دانش‌آموز جدید (با نام)"
@@ -57,7 +57,6 @@ def build_pdf_filenames(student_name: str, date_info: dict) -> tuple[str, str]:
     """
     ساخت دقیق نام فایل PDF مطابق دستور کاربر:
     «برنامه دکتر [نام دانش‌آموز] - [تاریخ روز اول].pdf»
-    مثال: «برنامه دکتر نرگس - دوشنبه ۴ آبان.pdf» یا «برنامه دکتر نرگس خانوم - دوشنبه ۴ آبان.pdf»
     """
     doctor_title = format_doctor_student_title(student_name.strip())
     first_day = to_persian_digits(date_info.get("start_full", date_info.get("short_range", ""))).strip()
@@ -81,6 +80,8 @@ class TelegramStudyPlanBot:
     def _warm_up_assets(self) -> None:
         try:
             _get_cached_data_uri(ASSETS_DIR / "Pinar-Regular.ttf", "font/ttf")
+            if (ASSETS_DIR / "Pinar-Bold.ttf").exists():
+                _get_cached_data_uri(ASSETS_DIR / "Pinar-Bold.ttf", "font/ttf")
             _get_cached_data_uri(ASSETS_DIR / "cover_bg.jpg", "image/jpeg")
             _get_cached_data_uri(ASSETS_DIR / "calendar_icon.png", "image/png")
             logger.info("Assets pre-cached in memory for instant PDF rendering.")
@@ -98,7 +99,6 @@ class TelegramStudyPlanBot:
 
     @staticmethod
     def build_main_reply_keyboard() -> dict:
-        """کیبورد ثابت پایین صفحه تلگرام برای دسترسی همیشگی به منوهای اصلی."""
         return {
             "keyboard": [
                 [{"text": BTN_NEW_PLAN}, {"text": BTN_STUDENTS}],
@@ -157,11 +157,14 @@ class TelegramStudyPlanBot:
         caption: str = "",
         reply_markup: dict | None = None,
     ) -> dict:
-        data_payload: dict = {
-            "chat_id": chat_id,
-            "caption": caption,
-            "parse_mode": "HTML",
-        }
+        """
+        ارسال فایل PDF در تلگرام.
+        مطابق درخواست کاربر، وقتی caption خالی باشد هیچ متنی زیر فایل درج نمی‌شود تا آماده فوروارد مستقیم به دانش‌آموز باشد.
+        """
+        data_payload: dict = {"chat_id": chat_id}
+        if caption:
+            data_payload["caption"] = caption
+            data_payload["parse_mode"] = "HTML"
         if reply_markup is not None:
             data_payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
         with open(file_path, "rb") as f:
@@ -184,12 +187,7 @@ class TelegramStudyPlanBot:
             }
         return self.sessions[chat_id]
 
-    # -------------------------------------------------------------------------
-    # ساخت دکمه‌های شیشه‌ای (InlineKeyboardMarkup) برای هر یک از ۳ گام
-    # -------------------------------------------------------------------------
-
     def _build_step1_date_inline_keyboard(self, session: dict) -> dict:
-        """گام ۱: دکمه‌های شیشه‌ای انتخاب تاریخ شروع برنامه (زیر پیام اول)."""
         plan_data = session.get("plan_data") or {}
         num_days = max(1, plan_data.get("summary", {}).get("num_days", 7))
         today = get_tehran_today()
@@ -236,10 +234,6 @@ class TelegramStudyPlanBot:
         return {"inline_keyboard": keyboard}
 
     def _build_step2_student_inline_keyboard(self) -> dict:
-        """
-        گام ۲: دکمه‌های شیشه‌ای ۲ ستونی لیست دانش‌آموزان با آیکون 👤 (مشابه عکس ارسالی کاربر)
-        + دکمه بازگشت به مرحله انتخاب تاریخ.
-        """
         students = self.db.list_students_with_ids(limit=18)
         keyboard: list[list[dict]] = []
         row: list[dict] = []
@@ -265,10 +259,6 @@ class TelegramStudyPlanBot:
         return {"inline_keyboard": keyboard}
 
     def _build_step3_second_output_inline_keyboard(self, session: dict) -> dict:
-        """
-        گام ۳: پرسش نهایی برای دریافت خروجی دوم (وضعیت هفتگی / اینفوگرافیک) یا فقط برنامه مطالعاتی
-        + دکمه بازگشت به انتخاب دانش‌آموز.
-        """
         sum_icon = "✅" if session.get("include_summary", True) else "⬜"
         sync_icon = "✅" if session.get("sync_weekdays", True) else "⬜"
 
@@ -302,14 +292,9 @@ class TelegramStudyPlanBot:
         ]
         return {"inline_keyboard": keyboard}
 
-    # -------------------------------------------------------------------------
-    # پیام‌ها و جریان ۳ مرحله‌ای (Step 1: Date -> Step 2: Student -> Step 3: Output Choice)
-    # -------------------------------------------------------------------------
-
     def _show_step1_ask_date(
         self, chat_id: int, session: dict, edit_msg_id: int | None = None
     ) -> None:
-        """مرحله اول: آنالیز برنامه و پرسیدن تاریخ شروع (از امروز یا فردا؟) و نمایش چند روزه بودن."""
         combined_text = "\n\n".join(session["raw_chunks"])
         plan_data = parse_study_plan(combined_text)
         session["plan_data"] = plan_data
@@ -322,7 +307,7 @@ class TelegramStudyPlanBot:
             self.send_message(
                 chat_id,
                 "⚠️ <b>جدولی در متن ارسالی شناسایی نشد!</b>\n"
-                "لطفاً خروجی جدول برنامه‌ریزی جمینای را مستقیماً کپی و ارسال کنید.",
+                "لطفاً خروجی جدول برنامه‌ریزی جمینای را کپی و ارسال کنید.",
                 reply_markup=self.build_main_reply_keyboard(),
             )
             return
@@ -349,7 +334,6 @@ class TelegramStudyPlanBot:
     def _show_step2_ask_student(
         self, chat_id: int, session: dict, edit_msg_id: int | None = None
     ) -> None:
-        """مرحله دوم: پس از مشخص شدن تاریخ، پرسیدن نام دانش‌آموز با دکمه‌های شیشه‌ای ۲ ستونی."""
         session["state"] = "STEP2_ASK_STUDENT"
         date_info = session["date_info"]
         num_days = session["plan_data"]["summary"]["num_days"]
@@ -359,7 +343,7 @@ class TelegramStudyPlanBot:
             f"(برنامه {to_persian_digits(num_days)} روزه)\n"
             f"📌 <b>تاریخ روز اول برنامه:</b> {date_info['start_full']}\n\n"
             f"👤 <b>مرحله ۲ از ۳ — اسم این دانش‌آموز چیه؟</b>\n"
-            f"• از دکمه‌های شیشه‌ای زیر انتخاب کنید یا <b>نام دانش‌آموز را مستقیم تایپ کنید</b> (مثلاً <i>نرگس</i>، <i>نرگس خانوم</i>، <i>خانم علیپور</i>).\n"
+            f"• از دکمه‌های شیشه‌ای زیر انتخاب کنید یا <b>نام دانش‌آموز را مستقیم تایپ کنید</b> (مثلاً <i>نرگس</i>، <i>نرگس خانوم</i>، <i>امیرعلی</i>).\n"
             f"• ربات به صورت خودکار سرتیتر و نام فایل PDF را <b>«برنامه دکتر [نام دانش‌آموز] - {date_info['start_full']}.pdf»</b> می‌گذارد:"
         )
         markup = self._build_step2_student_inline_keyboard()
@@ -371,12 +355,11 @@ class TelegramStudyPlanBot:
     def _show_step3_ask_second_output(
         self, chat_id: int, session: dict, edit_msg_id: int | None = None
     ) -> None:
-        """مرحله سوم: نمایش پیش‌نمایش نام دانش‌آموز و نام فایل PDF و پرسیدن اینکه آیا خروجی دوم (وضعیت هفتگی) را هم می‌خواهد یا خیر."""
         session["state"] = "STEP3_ASK_SECOND_PDF"
         student = session["student_name"].strip()
         date_info = session["date_info"]
         doctor_title = format_doctor_student_title(student)
-        main_filename, status_filename = build_pdf_filenames(student, date_info)
+        main_filename, _ = build_pdf_filenames(student, date_info)
 
         msg = (
             f"✅ <b>مشخصات برنامه نهایی شد:</b>\n\n"
@@ -395,25 +378,21 @@ class TelegramStudyPlanBot:
     def _finalize_and_send_pdfs(
         self, chat_id: int, session: dict, want_status_pdf: bool
     ) -> None:
+        """
+        تولید و ارسال فایل‌های PDF کاملاً بدون کپشن (caption="") و بدون دکمه روی خود فایل
+        تا مشاور بتواند مستقیماً فایل را برای دانش‌آموز فوروارد کند.
+        """
         student = session["student_name"].strip()
         plan_data = session["plan_data"]
         date_info = session["date_info"]
         num_days = plan_data["summary"]["num_days"]
         total_hours = plan_data["summary"]["total_hours"]
 
-        doctor_title = format_doctor_student_title(student)
         main_pdf_filename, status_pdf_filename = build_pdf_filenames(student, date_info)
-
-        self.send_message(
-            chat_id,
-            f"⚡ <b>در حال ساخت فوری فایل «{main_pdf_filename}» با فونت پینار...</b>",
-            reply_markup=self.build_main_reply_keyboard(),
-        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             out_main = tmp_path / main_pdf_filename
-            t0 = time.time()
             generate_study_plan_pdf(
                 plan_data=plan_data,
                 student_name=student,
@@ -423,36 +402,17 @@ class TelegramStudyPlanBot:
                 include_summary=session.get("include_summary", True),
                 sync_weekday_names=session.get("sync_weekdays", True),
             )
-            elapsed_main = round(time.time() - t0, 2)
-
-            caption_main = (
-                f"🎓 <b>{doctor_title}</b>\n"
-                f"📅 <b>شروع برنامه:</b> {date_info['start_full']} تا {date_info['end_full']} ({to_persian_digits(num_days)} روزه)\n"
-                f"⏱ <b>مجموع مطالعه:</b> {to_persian_digits(total_hours)} ساعت\n"
-                f"⚡ <b>زمان رندر:</b> {to_persian_digits(elapsed_main)} ثانیه با فونت پینار"
-            )
-            # اگر فقط خروجی اول را خواسته بود، دکمه شیشه‌ای دریافت خروجی دوم را هم زیر فایل می‌گذاریم تا هر زمان خواست با یک کلیک بگیرد
-            after_main_inline = {
-                "inline_keyboard": [
-                    [
-                        {
-                            "text": "🎯 ارسال برنامه جدید",
-                            "callback_data": "act:new_plan_prompt",
-                        }
-                    ]
-                ]
-            }
+            # ارسال کاملاً بدون کپشن و بدون دکمه زیر فایل برای فوروارد مستقیم به دانش‌آموز
             self.send_document(
                 chat_id,
                 out_main,
                 main_pdf_filename,
-                caption=caption_main,
-                reply_markup=after_main_inline if not want_status_pdf else None,
+                caption="",
+                reply_markup=None,
             )
 
             if want_status_pdf:
                 out_status = tmp_path / status_pdf_filename
-                t1 = time.time()
                 generate_weekly_status_pdf(
                     plan_data=plan_data,
                     student_name=student,
@@ -460,18 +420,12 @@ class TelegramStudyPlanBot:
                     output_path=out_status,
                     assets_dir=ASSETS_DIR,
                 )
-                elapsed_status = round(time.time() - t1, 2)
-                caption_status = (
-                    f"📊 <b>وضعیت هفتگی: {doctor_title}</b>\n"
-                    f"📅 <b>تاریخ شروع:</b> {date_info['start_full']}\n"
-                    f"⚡ <b>زمان رندر:</b> {to_persian_digits(elapsed_status)} ثانیه با فونت پینار"
-                )
                 self.send_document(
                     chat_id,
                     out_status,
                     status_pdf_filename,
-                    caption=caption_status,
-                    reply_markup=after_main_inline,
+                    caption="",
+                    reply_markup=None,
                 )
 
         self.db.add_or_touch_student(student)
@@ -480,10 +434,6 @@ class TelegramStudyPlanBot:
         session["raw_chunks"] = []
         session["plan_data"] = None
         session["date_info"] = None
-
-    # -------------------------------------------------------------------------
-    # مدیریت منوی دانش‌آموزان و تنظیمات با دکمه‌های شیشه‌ای
-    # -------------------------------------------------------------------------
 
     def _send_students_management_panel(self, chat_id: int, edit_msg_id: int | None = None) -> None:
         students = self.db.list_students_with_ids(limit=20)
@@ -515,18 +465,37 @@ class TelegramStudyPlanBot:
         else:
             self.send_message(chat_id, msg, reply_markup=markup)
 
-    # -------------------------------------------------------------------------
-    # پردازش پیام‌های متنی و فایل‌ها
-    # -------------------------------------------------------------------------
-
     def handle_message(self, message: dict) -> None:
         chat_id = message["chat"]["id"]
         text = (message.get("text") or "").strip()
 
-        if "document" in message and not text:
+        # پشتیبانی از آپلود مستقیم فونت (.ttf) یا فایل متنی برنامه (.txt / .md)
+        if "document" in message:
             doc = message["document"]
             fname = doc.get("file_name", "")
-            if fname.endswith(".txt") or fname.endswith(".md"):
+            if fname.lower().endswith(".ttf"):
+                f_info = self._api("getFile", data={"file_id": doc["file_id"]})
+                if f_info.get("ok"):
+                    f_path = f_info["result"]["file_path"]
+                    dl_url = f"https://api.telegram.org/file/bot{self.token}/{f_path}"
+                    font_bytes = self.http.get(dl_url, timeout=30).content
+                    if "bold" in fname.lower() or "black" in fname.lower() or "heavy" in fname.lower():
+                        target_font = ASSETS_DIR / "Pinar-Bold.ttf"
+                        label = "بولد (Pinar-Bold.ttf)"
+                    else:
+                        target_font = ASSETS_DIR / "Pinar-Bold.ttf"
+                        label = "بولد/سفارشی (Pinar-Bold.ttf)"
+                    target_font.write_bytes(font_bytes)
+                    clear_asset_cache()
+                    self._warm_up_assets()
+                    self.send_message(
+                        chat_id,
+                        f"✅ فونت <b>{fname}</b> با موفقیت به عنوان فونت <b>{label}</b> ذخیره و فعال شد!",
+                        reply_markup=self.build_main_reply_keyboard(),
+                    )
+                    return
+
+            if not text and (fname.endswith(".txt") or fname.endswith(".md")):
                 f_info = self._api("getFile", data={"file_id": doc["file_id"]})
                 if f_info.get("ok"):
                     f_path = f_info["result"]["file_path"]
@@ -540,21 +509,19 @@ class TelegramStudyPlanBot:
 
         session = self._get_session(chat_id)
 
-        # ۱. دستورات اصلی و دکمه‌های کیبورد پایین صفحه (ReplyKeyboardMarkup)
         if text.startswith("/start") or text.startswith("/help"):
             session["state"] = "IDLE"
             session["raw_chunks"] = []
             today_str = format_jalali_date(get_tehran_today(), include_weekday=True, include_year=True)
             welcome = (
                 f"سلام دکتر هاشمی عزیز! 👋🩺\n"
-                f"به ربات <b>تبدیل فوق‌سریع برنامه مطالعاتی به PDF و اینفوگرافیک وضعیت هفتگی (با فونت پینار)</b> خوش آمدید.\n\n"
+                f"به ربات <b>تبدیل فوق‌سریع برنامه مطالعاتی به PDF و اینفوگرافیک وضعیت هفتگی (با فونت پینار و پینار بولد)</b> خوش آمدید.\n\n"
                 f"📅 <b>تاریخ امروز:</b> {today_str}\n\n"
-                f"🚀 <b>مراحل کار (دقیقاً به ترتیب دلخواه شما):</b>\n"
-                f"۱️⃣ ابتدا <b>متن برنامه مطالعاتی جمینای</b> را بفرستید.\n"
-                f"۲️⃣ ربات تعداد روزها را تشخیص می‌دهد و با <b>دکمه شیشه‌ای</b> می‌پرسد <b>برنامه از کی چیده بشه؟</b> (امروز / فردا / شنبه آینده).\n"
-                f"۳️⃣ سپس <b>نام دانش‌آموز</b> را با دکمه‌های شیشه‌ای می‌پرسد و نام فایل را خودکار <b>«برنامه دکتر [نام] - [تاریخ روز اول]»</b> می‌گذارد.\n"
-                f"۴️⃣ در آخر می‌پرسد <b>آیا خروجی دوم (وضعیت هفتگی) را هم می‌خواهید یا خیر</b> و بلافاصله فایل‌ها را تحویل می‌دهد!\n\n"
-                f"👇 <i>منوهای اصلی در پایین صفحه فعال هستند و دکمه‌های هر مرحله نیز به صورت شیشه‌ای زیر پیام‌ها نمایش داده می‌شوند:</i>"
+                f"🚀 <b>مراحل کار:</b>\n"
+                f"۱️⃣ ابتدا <b>متن برنامه مطالعاتی جمینای</b> را کپی کرده و بفرستید (هم کپی مستقیم از صفحه وب جمینای و هم کپی مارک‌داون پشتیبانی می‌شود).\n"
+                f"۲️⃣ با <b>دکمه شیشه‌ای</b> مشخص کنید <b>برنامه از کی چیده بشه؟</b> (امروز / فردا / شنبه آینده).\n"
+                f"۳️⃣ <b>نام دانش‌آموز</b> را از دکمه‌های شیشه‌ای انتخاب یا تایپ کنید.\n"
+                f"۴️⃣ انتخاب کنید <b>آیا خروجی دوم (وضعیت هفتگی) را هم می‌خواهید یا خیر</b> تا فایل PDF بدون هیچ کپشن اضافه‌ای (آماده فوروارد مستقیم برای دانش‌آموز) ارسال شود!"
             )
             self.send_message(
                 chat_id,
@@ -639,12 +606,11 @@ class TelegramStudyPlanBot:
             }
             self.send_message(
                 chat_id,
-                "⚙️ <b>تنظیمات پیش‌فرض ساخت PDF:</b>\nبرای تغییر هر مورد روی دکمه شیشه‌ای آن بزنید:",
+                "⚙️ <b>تنظیمات پیش‌فرض ساخت PDF:</b>\nبرای تغییر هر مورد روی دکمه شیشه‌ای آن بزنید (همچنین هر زمان فایل فونت <code>.ttf</code> بفرستید خودکار جایگزین فونت بولد می‌شود):",
                 reply_markup=kb,
             )
             return
 
-        # ۲. بررسی وضعیت‌های ورودی متنی
         if session["state"] == "ADD_STUDENT_ONLY":
             self.db.add_or_touch_student(text.strip())
             session["state"] = "IDLE"
@@ -655,10 +621,16 @@ class TelegramStudyPlanBot:
             )
             return
 
-        looks_like_plan = ("پارت" in text and "درس" in text) or ("ساعت شروع" in text) or ("روز اول" in text)
+        looks_like_plan = (
+            ("پارت" in text and "درس" in text)
+            or ("ساعت شروع" in text)
+            or ("جمع ساعت مطالعه" in text)
+            or ("روز اول" in text)
+            or ("دقیقه" in text and "تست" in text)
+        )
 
         if session["state"] in ("IDLE", "WAIT_MORE_TEXT") or (
-            session["state"] == "STEP1_ASK_DATE" and looks_like_plan and len(text) > 80
+            session["state"] == "STEP1_ASK_DATE" and looks_like_plan and len(text) > 60
         ):
             session["raw_chunks"].append(text)
             self._show_step1_ask_date(chat_id, session)
@@ -677,7 +649,7 @@ class TelegramStudyPlanBot:
             return
 
         if session["state"] == "STEP2_ASK_STUDENT":
-            if looks_like_plan and len(text) > 80:
+            if looks_like_plan and len(text) > 60:
                 session["raw_chunks"] = [text]
                 self._show_step1_ask_date(chat_id, session)
                 return
@@ -686,7 +658,6 @@ class TelegramStudyPlanBot:
             self._show_step3_ask_second_output(chat_id, session)
             return
 
-        # اگر در هر حالت دیگری کاربر جدول جدید فرستاد، بلافاصله از مرحله ۱ (پرسیدن تاریخ) شروع کن
         if looks_like_plan:
             session["raw_chunks"] = [text]
             self._show_step1_ask_date(chat_id, session)
@@ -696,10 +667,6 @@ class TelegramStudyPlanBot:
                 "📋 لطفاً ابتدا متن جدول برنامه مطالعاتی جمینای را ارسال کنید (یا از دکمه‌های منوی پایین صفحه استفاده نمایید).",
                 reply_markup=self.build_main_reply_keyboard(),
             )
-
-    # -------------------------------------------------------------------------
-    # پردازش کلیک روی دکمه‌های شیشه‌ای (Callback Queries)
-    # -------------------------------------------------------------------------
 
     def handle_callback(self, callback: dict) -> None:
         cb_id = callback["id"]
@@ -794,7 +761,6 @@ class TelegramStudyPlanBot:
                 )
             return
 
-        # دکمه‌های بازگشت (Back Buttons) بین مراحل
         if data == "back:to_step1":
             if not session.get("plan_data"):
                 self.send_message(chat_id, "⚠️ ابتدا متن برنامه را ارسال کنید.")
@@ -809,7 +775,6 @@ class TelegramStudyPlanBot:
             self._show_step2_ask_student(chat_id, session, edit_msg_id=msg_id)
             return
 
-        # مرحله ۱ -> انتخاب تاریخ و رفتن به مرحله ۲ (انتخاب دانش‌آموز)
         if data.startswith("step1_date:"):
             if not session.get("plan_data"):
                 self.send_message(chat_id, "⚠️ ابتدا متن برنامه را ارسال کنید.")
@@ -853,7 +818,6 @@ class TelegramStudyPlanBot:
                     )
             return
 
-        # مرحله ۲ -> انتخاب دانش‌آموز از دکمه شیشه‌ای و رفتن به مرحله ۳ (پرسیدن خروجی دوم)
         if data.startswith("step2_stu:"):
             if not session.get("plan_data") or not session.get("date_info"):
                 self.send_message(chat_id, "⚠️ ابتدا متن برنامه را ارسال کنید.")
@@ -864,7 +828,6 @@ class TelegramStudyPlanBot:
             self._show_step3_ask_second_output(chat_id, session, edit_msg_id=msg_id)
             return
 
-        # تغییر تیک‌های فرعی در مرحله ۳
         if data in ("toggle:summary", "toggle:sync"):
             if data == "toggle:summary":
                 session["include_summary"] = not session.get("include_summary", True)
@@ -873,7 +836,6 @@ class TelegramStudyPlanBot:
             self._show_step3_ask_second_output(chat_id, session, edit_msg_id=msg_id)
             return
 
-        # مرحله ۳ -> پاسخ به «آیا خروجی دوم (وضعیت هفتگی) را هم می‌خواهی یا فقط اولی کافیه؟»
         if data.startswith("step3_out:"):
             if not session.get("plan_data") or not session.get("date_info"):
                 self.send_message(chat_id, "⚠️ ابتدا متن برنامه را ارسال کنید.")
@@ -884,7 +846,7 @@ class TelegramStudyPlanBot:
             return
 
     def run_polling(self) -> None:
-        logger.info("Starting @DRpdfmakerbot v3 polling loop...")
+        logger.info("Starting @DRpdfmakerbot v4 polling loop...")
         offset = 0
         while True:
             try:
