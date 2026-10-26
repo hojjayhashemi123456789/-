@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-ربات تلگرام تبدیل برنامه‌های مطالعاتی جمینای به PDF اختصاصی دکتر هاشمی (@DRpdfmakerbot) - نسخه ۲
-پشتیبانی از:
-- دریافت متن جدول از جمینای (تک‌پیامی، چندپیامی متوالی، یا فایل متنی .txt)
-- تشخیص خودکار تعداد روزها، ساعت مطالعه و تعداد تست‌ها (گردشده به مضرب ۱۰)
-- انتخاب سریع نام دانش‌آموز از لیست دکمه‌های شیشه‌ای یا تایپ نام جدید (با عنوان سربرگ «برنامه دکتر [نام]»)
-- تقویم شمسی هوشمند به وقت ایران با گزینه‌های «شروع از امروز»، «شروع از فردا»، «شروع از شنبه آینده» و «تاریخ دلخواه»
-- تولید فوری PDF اصلی برنامه مطالعاتی + گزینه اختیاری تولید فایل PDF جداگانه «وضعیت هفتگی» (اینفوگرافیک حرفه‌ای با فونت پینار)
+ربات تلگرام تبدیل برنامه‌های مطالعاتی جمینای به PDF اختصاصی دکتر هاشمی (@DRpdfmakerbot) - نسخه ۳
+ویژگی‌های نسخه ۳ (اصلاح کامل ترتیب مراحل و کیبورد دوگانه):
+۱. کیبورد دائمی پایین صفحه (ReplyKeyboardMarkup) برای منوهای اصلی + دکمه‌های شیشه‌ای (InlineKeyboardMarkup) زیر هر پیام برای مراحل برنامه و دکمه بازگشت.
+۲. مرحله اول (بلافاصله پس از ارسال متن برنامه): تشخیص خودکار تعداد روزهای برنامه و پرسیدن «این برنامه از کی چیده بشه؟» (از امروز / از فردا / از شنبه آینده / تاریخ دلخواه) با دکمه‌های شیشه‌ای.
+۳. مرحله دوم (پس از انتخاب تاریخ): پرسیدن «اسم این دانش‌آموز چیه؟» با نمایش ۲ ستونی دکمه‌های شیشه‌ای دانش‌آموزان (مشابه اسکرین‌شات ارسالی) یا تایپ مستقیم نام، به همراه تنظیم خودکار نام فایل خروجی به صورت «برنامه دکتر [نام دانش‌آموز] - [تاریخ روز اول].pdf» و دکمه بازگشت به مرحله تاریخ.
+۴. مرحله سوم (پس از انتخاب دانش‌آموز): پرسیدن «آیا می‌خوای خروجی دوم (وضعیت هفتگی / اینفوگرافیک) رو هم بهت بدم یا فقط همین یه خروجی کافیه؟» با دکمه‌های شیشه‌ای و دکمه بازگشت به مرحله انتخاب دانش‌آموز.
 """
 
 from __future__ import annotations
@@ -45,6 +44,30 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", DEFAULT_BOT_TOKEN).strip() or DEFAULT_BO
 DB_PATH = os.environ.get("DB_PATH", "consulting_bot.db")
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 
+# دکمه‌های منوی اصلی در پایین صفحه تلگرام (ReplyKeyboardMarkup)
+BTN_NEW_PLAN = "🎯📅 برنامه درسی دوره‌ای (ارسال برنامه جدید)"
+BTN_STUDENTS = "👥 مدیریت و مشاهده لیست دانش‌آموزان"
+BTN_ADD_STUDENT = "🟢👤 افزودن دانش‌آموز جدید (با نام)"
+BTN_RECENT_PLANS = "📊 آخرین برنامه‌های صادرشده"
+BTN_SETTINGS = "⚙️ تنظیمات پیش‌فرض خروجی"
+BTN_RESET = "🔄 شروع مجدد / پاکسازی حافظه"
+
+
+def build_pdf_filenames(student_name: str, date_info: dict) -> tuple[str, str]:
+    """
+    ساخت دقیق نام فایل PDF مطابق دستور کاربر:
+    «برنامه دکتر [نام دانش‌آموز] - [تاریخ روز اول].pdf»
+    مثال: «برنامه دکتر نرگس - دوشنبه ۴ آبان.pdf» یا «برنامه دکتر نرگس خانوم - دوشنبه ۴ آبان.pdf»
+    """
+    doctor_title = format_doctor_student_title(student_name.strip())
+    first_day = to_persian_digits(date_info.get("start_full", date_info.get("short_range", ""))).strip()
+    safe_title = doctor_title.replace("/", "-").replace("\\", "-")
+    safe_day = first_day.replace("/", "-").replace("\\", "-")
+
+    main_filename = f"{safe_title} - {safe_day}.pdf"
+    status_filename = f"وضعیت هفتگی - {safe_title} - {safe_day}.pdf"
+    return main_filename, status_filename
+
 
 class TelegramStudyPlanBot:
     def __init__(self, token: str, db_path: str = "consulting_bot.db") -> None:
@@ -53,7 +76,6 @@ class TelegramStudyPlanBot:
         self.http = requests.Session()
         self.db = ConsultingDatabase(db_path)
         self.sessions: dict[int, dict] = {}
-        # پیش‌بارگذاری فونت پینار و عکس‌های کاور در حافظه رم در لحظه استارت بات برای رندر آنی
         self._warm_up_assets()
 
     def _warm_up_assets(self) -> None:
@@ -74,6 +96,19 @@ class TelegramStudyPlanBot:
             logger.error("Telegram API error (%s): %s", method, exc)
             return {"ok": False, "description": str(exc)}
 
+    @staticmethod
+    def build_main_reply_keyboard() -> dict:
+        """کیبورد ثابت پایین صفحه تلگرام برای دسترسی همیشگی به منوهای اصلی."""
+        return {
+            "keyboard": [
+                [{"text": BTN_NEW_PLAN}, {"text": BTN_STUDENTS}],
+                [{"text": BTN_ADD_STUDENT}, {"text": BTN_RECENT_PLANS}],
+                [{"text": BTN_SETTINGS}, {"text": BTN_RESET}],
+            ],
+            "resize_keyboard": True,
+            "is_persistent": True,
+        }
+
     def send_message(
         self,
         chat_id: int,
@@ -90,15 +125,23 @@ class TelegramStudyPlanBot:
             payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
         return self._api("sendMessage", data=payload)
 
-    def edit_message_reply_markup(self, chat_id: int, message_id: int, reply_markup: dict) -> dict:
-        return self._api(
-            "editMessageReplyMarkup",
-            data={
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "reply_markup": json.dumps(reply_markup, ensure_ascii=False),
-            },
-        )
+    def edit_message_text(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        reply_markup: dict | None = None,
+        parse_mode: str = "HTML",
+    ) -> dict:
+        payload: dict = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": parse_mode,
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+        return self._api("editMessageText", data=payload)
 
     def answer_callback(self, callback_id: str, text: str = "") -> None:
         self._api(
@@ -107,16 +150,24 @@ class TelegramStudyPlanBot:
         )
 
     def send_document(
-        self, chat_id: int, file_path: Path, filename: str, caption: str = ""
+        self,
+        chat_id: int,
+        file_path: Path,
+        filename: str,
+        caption: str = "",
+        reply_markup: dict | None = None,
     ) -> dict:
+        data_payload: dict = {
+            "chat_id": chat_id,
+            "caption": caption,
+            "parse_mode": "HTML",
+        }
+        if reply_markup is not None:
+            data_payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
         with open(file_path, "rb") as f:
             return self._api(
                 "sendDocument",
-                data={
-                    "chat_id": chat_id,
-                    "caption": caption,
-                    "parse_mode": "HTML",
-                },
+                data=data_payload,
                 files={"document": (filename, f, "application/pdf")},
             )
 
@@ -126,38 +177,19 @@ class TelegramStudyPlanBot:
                 "state": "IDLE",
                 "raw_chunks": [],
                 "plan_data": None,
+                "date_info": None,
                 "student_name": "",
                 "include_summary": True,
-                "send_weekly_status_pdf": True,
                 "sync_weekdays": True,
             }
         return self.sessions[chat_id]
 
-    def _build_student_selection_keyboard(self) -> dict:
-        students = self.db.list_students_with_ids(limit=10)
-        keyboard: list[list[dict]] = []
-        row: list[dict] = []
-        for item in students:
-            row.append(
-                {
-                    "text": f"👤 {item['name']}",
-                    "callback_data": f"stuid:{item['id']}",
-                }
-            )
-            if len(row) == 2:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-        keyboard.append(
-            [
-                {"text": "➕ افزودن متن دیگر (ادامه برنامه)", "callback_data": "act:append_more"},
-                {"text": "❌ لغو و شروع مجدد", "callback_data": "act:reset"},
-            ]
-        )
-        return {"inline_keyboard": keyboard}
+    # -------------------------------------------------------------------------
+    # ساخت دکمه‌های شیشه‌ای (InlineKeyboardMarkup) برای هر یک از ۳ گام
+    # -------------------------------------------------------------------------
 
-    def _build_date_selection_keyboard(self, session: dict) -> dict:
+    def _build_step1_date_inline_keyboard(self, session: dict) -> dict:
+        """گام ۱: دکمه‌های شیشه‌ای انتخاب تاریخ شروع برنامه (زیر پیام اول)."""
         plan_data = session.get("plan_data") or {}
         num_days = max(1, plan_data.get("summary", {}).get("num_days", 7))
         today = get_tehran_today()
@@ -168,39 +200,89 @@ class TelegramStudyPlanBot:
         r_tmrw = compute_plan_date_range(tomorrow, num_days)
         r_sat = compute_plan_date_range(next_sat, num_days)
 
-        status_icon = "✅" if session.get("send_weekly_status_pdf", True) else "⬜"
+        keyboard = [
+            [
+                {
+                    "text": f"🟢📅 از امروز ({r_today['start_full']} تا {r_today['end_full']})",
+                    "callback_data": "step1_date:today",
+                }
+            ],
+            [
+                {
+                    "text": f"🟡📆 از فردا ({r_tmrw['start_full']} تا {r_tmrw['end_full']})",
+                    "callback_data": "step1_date:tomorrow",
+                }
+            ],
+            [
+                {
+                    "text": f"🟣🗓 از شنبه آینده ({r_sat['start_full']} تا {r_sat['end_full']})",
+                    "callback_data": "step1_date:saturday",
+                }
+            ],
+            [
+                {
+                    "text": "✏️ وارد کردن تاریخ دلخواه",
+                    "callback_data": "step1_date:custom",
+                },
+                {
+                    "text": "➕ افزودن بخش دیگر برنامه",
+                    "callback_data": "act:append_more",
+                },
+            ],
+            [
+                {"text": "❌ لغو و شروع مجدد", "callback_data": "act:reset"},
+            ],
+        ]
+        return {"inline_keyboard": keyboard}
+
+    def _build_step2_student_inline_keyboard(self) -> dict:
+        """
+        گام ۲: دکمه‌های شیشه‌ای ۲ ستونی لیست دانش‌آموزان با آیکون 👤 (مشابه عکس ارسالی کاربر)
+        + دکمه بازگشت به مرحله انتخاب تاریخ.
+        """
+        students = self.db.list_students_with_ids(limit=18)
+        keyboard: list[list[dict]] = []
+        row: list[dict] = []
+        for item in students:
+            row.append(
+                {
+                    "text": f"👤 {item['name']}",
+                    "callback_data": f"step2_stu:{item['id']}",
+                }
+            )
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+
+        keyboard.append(
+            [
+                {"text": "🔙 بازگشت به انتخاب تاریخ", "callback_data": "back:to_step1"},
+                {"text": "❌ لغو", "callback_data": "act:reset"},
+            ]
+        )
+        return {"inline_keyboard": keyboard}
+
+    def _build_step3_second_output_inline_keyboard(self, session: dict) -> dict:
+        """
+        گام ۳: پرسش نهایی برای دریافت خروجی دوم (وضعیت هفتگی / اینفوگرافیک) یا فقط برنامه مطالعاتی
+        + دکمه بازگشت به انتخاب دانش‌آموز.
+        """
         sum_icon = "✅" if session.get("include_summary", True) else "⬜"
         sync_icon = "✅" if session.get("sync_weekdays", True) else "⬜"
 
         keyboard = [
             [
                 {
-                    "text": f"📅 از امروز ({r_today['start_full']} تا {r_today['end_full']})",
-                    "callback_data": "date:today",
+                    "text": "✅ آره، خروجی دوم (وضعیت هفتگی) رو هم بده!",
+                    "callback_data": "step3_out:both",
                 }
             ],
             [
                 {
-                    "text": f"📆 از فردا ({r_tmrw['start_full']} تا {r_tmrw['end_full']})",
-                    "callback_data": "date:tomorrow",
-                }
-            ],
-            [
-                {
-                    "text": f"🗓 از شنبه آینده ({r_sat['start_full']} تا {r_sat['end_full']})",
-                    "callback_data": "date:saturday",
-                }
-            ],
-            [
-                {
-                    "text": "✏️ وارد کردن تاریخ دلخواه",
-                    "callback_data": "date:custom",
-                }
-            ],
-            [
-                {
-                    "text": f"{status_icon} ارسال PDF جداگانه «وضعیت هفتگی» (اینفوگرافیک)",
-                    "callback_data": "toggle:weekly_status",
+                    "text": "📄 نه، فقط همین برنامه مطالعاتی کافیه",
+                    "callback_data": "step3_out:main_only",
                 }
             ],
             [
@@ -214,13 +296,20 @@ class TelegramStudyPlanBot:
                 },
             ],
             [
-                {"text": "🔙 تغییر نام دانش‌آموز", "callback_data": "act:back_student"},
+                {"text": "🔙 بازگشت به انتخاب دانش‌آموز", "callback_data": "back:to_step2"},
                 {"text": "❌ لغو", "callback_data": "act:reset"},
             ],
         ]
         return {"inline_keyboard": keyboard}
 
-    def _prompt_student_name(self, chat_id: int, session: dict) -> None:
+    # -------------------------------------------------------------------------
+    # پیام‌ها و جریان ۳ مرحله‌ای (Step 1: Date -> Step 2: Student -> Step 3: Output Choice)
+    # -------------------------------------------------------------------------
+
+    def _show_step1_ask_date(
+        self, chat_id: int, session: dict, edit_msg_id: int | None = None
+    ) -> None:
+        """مرحله اول: آنالیز برنامه و پرسیدن تاریخ شروع (از امروز یا فردا؟) و نمایش چند روزه بودن."""
         combined_text = "\n\n".join(session["raw_chunks"])
         plan_data = parse_study_plan(combined_text)
         session["plan_data"] = plan_data
@@ -234,66 +323,92 @@ class TelegramStudyPlanBot:
                 chat_id,
                 "⚠️ <b>جدولی در متن ارسالی شناسایی نشد!</b>\n"
                 "لطفاً خروجی جدول برنامه‌ریزی جمینای را مستقیماً کپی و ارسال کنید.",
+                reply_markup=self.build_main_reply_keyboard(),
             )
             return
 
-        session["state"] = "ASK_STUDENT"
-        today_str = format_jalali_date(get_tehran_today(), include_weekday=True, include_year=True)
+        session["state"] = "STEP1_ASK_DATE"
+        today = get_tehran_today()
+        today_str = format_jalali_date(today, include_weekday=True, include_year=True)
 
         msg = (
-            f"✅ <b>برنامه مطالعاتی با موفقیت دریافت و آنالیز شد!</b>\n\n"
-            f"📊 <b>تعداد روزهای تشخیص‌داده‌شده:</b> {to_persian_digits(num_days)} روز\n"
+            f"✅ <b>فایل برنامه دریافت شد!</b>\n\n"
+            f"📊 <b>طول برنامه تشخیص‌داده‌شده:</b> برنامه <b>{to_persian_digits(num_days)} روزه</b>\n"
             f"⏱ <b>مجموع ساعات مطالعه:</b> {to_persian_digits(total_hours)} ساعت\n"
-            f"📝 <b>مجموع تست‌ها (گردشده):</b> حدود {to_persian_digits(total_tests)} تست\n"
+            f"📝 <b>مجموع تست‌ها:</b> حدود {to_persian_digits(total_tests)} تست\n"
             f"📅 <b>تاریخ امروز:</b> {today_str}\n\n"
-            f"👤 <b>لطفاً نام دانش‌آموز را تایپ کنید</b> (مثلاً <i>نرگس</i>، <i>خانم علیپور</i>، یا از دکمه‌های زیر انتخاب نمایید):\n"
-            f"<i>💡 در سربرگ برنامه به صورت خودکار «برنامه دکتر [نام]» درج خواهد شد.</i>"
+            f"👇 <b>مرحله ۱ از ۳ — این برنامه {to_persian_digits(num_days)} روزه از کی چیده بشه؟</b>\n"
+            f"<i>(از روی دکمه‌های شیشه‌ای زیر انتخاب کنید):</i>"
         )
-        self.send_message(
-            chat_id,
-            msg,
-            reply_markup=self._build_student_selection_keyboard(),
-        )
+        markup = self._build_step1_date_inline_keyboard(session)
+        if edit_msg_id:
+            self.edit_message_text(chat_id, edit_msg_id, msg, reply_markup=markup)
+        else:
+            self.send_message(chat_id, msg, reply_markup=markup)
 
-    def _prompt_date_choice(self, chat_id: int, session: dict) -> None:
-        session["state"] = "ASK_DATE"
-        student = session["student_name"]
-        header_preview = format_doctor_student_title(student)
+    def _show_step2_ask_student(
+        self, chat_id: int, session: dict, edit_msg_id: int | None = None
+    ) -> None:
+        """مرحله دوم: پس از مشخص شدن تاریخ، پرسیدن نام دانش‌آموز با دکمه‌های شیشه‌ای ۲ ستونی."""
+        session["state"] = "STEP2_ASK_STUDENT"
+        date_info = session["date_info"]
         num_days = session["plan_data"]["summary"]["num_days"]
-        today_str = format_jalali_date(get_tehran_today(), include_weekday=True, include_year=True)
 
         msg = (
-            f"👤 <b>دانش‌آموز:</b> {student}\n"
-            f"🏷 <b>عنوان سربرگ:</b> {header_preview}\n"
-            f"📆 <b>طول برنامه:</b> {to_persian_digits(num_days)} روزه\n"
-            f"🕒 <b>امروز به شمسی:</b> {today_str}\n\n"
-            f"👇 <b>برنامه از چه روزی شروع می‌شود؟</b>\n"
-            f"<i>می‌توانید تیک «ارسال PDF جداگانه وضعیت هفتگی» را هم روشن یا خاموش کنید:</i>"
+            f"📅 <b>بازه انتخاب‌شده:</b> {date_info['start_full']} تا {date_info['end_full']} "
+            f"(برنامه {to_persian_digits(num_days)} روزه)\n"
+            f"📌 <b>تاریخ روز اول برنامه:</b> {date_info['start_full']}\n\n"
+            f"👤 <b>مرحله ۲ از ۳ — اسم این دانش‌آموز چیه؟</b>\n"
+            f"• از دکمه‌های شیشه‌ای زیر انتخاب کنید یا <b>نام دانش‌آموز را مستقیم تایپ کنید</b> (مثلاً <i>نرگس</i>، <i>نرگس خانوم</i>، <i>خانم علیپور</i>).\n"
+            f"• ربات به صورت خودکار سرتیتر و نام فایل PDF را <b>«برنامه دکتر [نام دانش‌آموز] - {date_info['start_full']}.pdf»</b> می‌گذارد:"
         )
-        self.send_message(
-            chat_id,
-            msg,
-            reply_markup=self._build_date_selection_keyboard(session),
-        )
+        markup = self._build_step2_student_inline_keyboard()
+        if edit_msg_id:
+            self.edit_message_text(chat_id, edit_msg_id, msg, reply_markup=markup)
+        else:
+            self.send_message(chat_id, msg, reply_markup=markup)
 
-    def _finalize_and_send_pdf(
-        self, chat_id: int, session: dict, date_info: dict
+    def _show_step3_ask_second_output(
+        self, chat_id: int, session: dict, edit_msg_id: int | None = None
+    ) -> None:
+        """مرحله سوم: نمایش پیش‌نمایش نام دانش‌آموز و نام فایل PDF و پرسیدن اینکه آیا خروجی دوم (وضعیت هفتگی) را هم می‌خواهد یا خیر."""
+        session["state"] = "STEP3_ASK_SECOND_PDF"
+        student = session["student_name"].strip()
+        date_info = session["date_info"]
+        doctor_title = format_doctor_student_title(student)
+        main_filename, status_filename = build_pdf_filenames(student, date_info)
+
+        msg = (
+            f"✅ <b>مشخصات برنامه نهایی شد:</b>\n\n"
+            f"👤 <b>نام دانش‌آموز:</b> {student}\n"
+            f"🏷 <b>سرتیتر داخل برنامه:</b> {doctor_title}\n"
+            f"📅 <b>تاریخ روز اول برنامه:</b> {date_info['start_full']}\n"
+            f"📂 <b>نام فایل خروجی اول:</b> <code>{main_filename}</code>\n\n"
+            f"❓ <b>مرحله ۳ از ۳ — آیا می‌خوای اون خروجی دومی (PDF وضعیت هفتگی / اینفوگرافیک) رو هم بهت بدم یا فقط همین یه خروجی برات کافیه؟</b>"
+        )
+        markup = self._build_step3_second_output_inline_keyboard(session)
+        if edit_msg_id:
+            self.edit_message_text(chat_id, edit_msg_id, msg, reply_markup=markup)
+        else:
+            self.send_message(chat_id, msg, reply_markup=markup)
+
+    def _finalize_and_send_pdfs(
+        self, chat_id: int, session: dict, want_status_pdf: bool
     ) -> None:
         student = session["student_name"].strip()
         plan_data = session["plan_data"]
+        date_info = session["date_info"]
         num_days = plan_data["summary"]["num_days"]
         total_hours = plan_data["summary"]["total_hours"]
-        want_status_pdf = session.get("send_weekly_status_pdf", True)
+
+        doctor_title = format_doctor_student_title(student)
+        main_pdf_filename, status_pdf_filename = build_pdf_filenames(student, date_info)
 
         self.send_message(
             chat_id,
-            f"⚡ <b>در حال رندر فوری خروجی برای «{format_doctor_student_title(student)}»...</b>",
+            f"⚡ <b>در حال ساخت فوری فایل «{main_pdf_filename}» با فونت پینار...</b>",
+            reply_markup=self.build_main_reply_keyboard(),
         )
-
-        safe_slug = student.replace(" ", "_").replace("/", "-")
-        range_slug = to_persian_digits(date_info["short_range"]).replace(" ", "_")
-        main_pdf_filename = f"برنامه_مطالعاتی_{safe_slug}_{range_slug}.pdf"
-        status_pdf_filename = f"وضعیت_هفتگی_{safe_slug}_{range_slug}.pdf"
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -311,12 +426,29 @@ class TelegramStudyPlanBot:
             elapsed_main = round(time.time() - t0, 2)
 
             caption_main = (
-                f"🎓 <b>{format_doctor_student_title(student)}</b>\n"
-                f"📅 <b>بازه برنامه:</b> {date_info['start_full']} تا {date_info['end_full']} ({to_persian_digits(num_days)} روزه)\n"
+                f"🎓 <b>{doctor_title}</b>\n"
+                f"📅 <b>شروع برنامه:</b> {date_info['start_full']} تا {date_info['end_full']} ({to_persian_digits(num_days)} روزه)\n"
                 f"⏱ <b>مجموع مطالعه:</b> {to_persian_digits(total_hours)} ساعت\n"
                 f"⚡ <b>زمان رندر:</b> {to_persian_digits(elapsed_main)} ثانیه با فونت پینار"
             )
-            self.send_document(chat_id, out_main, main_pdf_filename, caption=caption_main)
+            # اگر فقط خروجی اول را خواسته بود، دکمه شیشه‌ای دریافت خروجی دوم را هم زیر فایل می‌گذاریم تا هر زمان خواست با یک کلیک بگیرد
+            after_main_inline = {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "🎯 ارسال برنامه جدید",
+                            "callback_data": "act:new_plan_prompt",
+                        }
+                    ]
+                ]
+            }
+            self.send_document(
+                chat_id,
+                out_main,
+                main_pdf_filename,
+                caption=caption_main,
+                reply_markup=after_main_inline if not want_status_pdf else None,
+            )
 
             if want_status_pdf:
                 out_status = tmp_path / status_pdf_filename
@@ -330,12 +462,16 @@ class TelegramStudyPlanBot:
                 )
                 elapsed_status = round(time.time() - t1, 2)
                 caption_status = (
-                    f"📊 <b>وضعیت هفتگی (اینفوگرافیک): {format_doctor_student_title(student)}</b>\n"
-                    f"📅 <b>بازه:</b> {date_info['short_range']}\n"
+                    f"📊 <b>وضعیت هفتگی: {doctor_title}</b>\n"
+                    f"📅 <b>تاریخ شروع:</b> {date_info['start_full']}\n"
                     f"⚡ <b>زمان رندر:</b> {to_persian_digits(elapsed_status)} ثانیه با فونت پینار"
                 )
                 self.send_document(
-                    chat_id, out_status, status_pdf_filename, caption=caption_status
+                    chat_id,
+                    out_status,
+                    status_pdf_filename,
+                    caption=caption_status,
+                    reply_markup=after_main_inline,
                 )
 
         self.db.add_or_touch_student(student)
@@ -343,6 +479,45 @@ class TelegramStudyPlanBot:
         session["state"] = "IDLE"
         session["raw_chunks"] = []
         session["plan_data"] = None
+        session["date_info"] = None
+
+    # -------------------------------------------------------------------------
+    # مدیریت منوی دانش‌آموزان و تنظیمات با دکمه‌های شیشه‌ای
+    # -------------------------------------------------------------------------
+
+    def _send_students_management_panel(self, chat_id: int, edit_msg_id: int | None = None) -> None:
+        students = self.db.list_students_with_ids(limit=20)
+        keyboard: list[list[dict]] = []
+        row: list[dict] = []
+        for item in students:
+            row.append(
+                {
+                    "text": f"👤 {item['name']} (🗑)",
+                    "callback_data": f"delstu:{item['id']}",
+                }
+            )
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append(
+            [{"text": "🟢➕ افزودن دانش‌آموز جدید", "callback_data": "act:add_student_only"}]
+        )
+        msg = (
+            "👥 <b>مدیریت لیست دانش‌آموزان ذخیره‌شده:</b>\n\n"
+            "• هنگام ساخت برنامه، این اسامی به صورت دکمه‌های شیشه‌ای ۲ ستونی نمایش داده می‌شوند.\n"
+            "• برای <b>حذف</b> هر نام، روی آن کلیک کنید یا برای افزودن نام جدید دکمه زیر را بزنید:"
+        )
+        markup = {"inline_keyboard": keyboard}
+        if edit_msg_id:
+            self.edit_message_text(chat_id, edit_msg_id, msg, reply_markup=markup)
+        else:
+            self.send_message(chat_id, msg, reply_markup=markup)
+
+    # -------------------------------------------------------------------------
+    # پردازش پیام‌های متنی و فایل‌ها
+    # -------------------------------------------------------------------------
 
     def handle_message(self, message: dict) -> None:
         chat_id = message["chat"]["id"]
@@ -365,6 +540,7 @@ class TelegramStudyPlanBot:
 
         session = self._get_session(chat_id)
 
+        # ۱. دستورات اصلی و دکمه‌های کیبورد پایین صفحه (ReplyKeyboardMarkup)
         if text.startswith("/start") or text.startswith("/help"):
             session["state"] = "IDLE"
             session["raw_chunks"] = []
@@ -373,57 +549,157 @@ class TelegramStudyPlanBot:
                 f"سلام دکتر هاشمی عزیز! 👋🩺\n"
                 f"به ربات <b>تبدیل فوق‌سریع برنامه مطالعاتی به PDF و اینفوگرافیک وضعیت هفتگی (با فونت پینار)</b> خوش آمدید.\n\n"
                 f"📅 <b>تاریخ امروز:</b> {today_str}\n\n"
-                f"🚀 <b>نحوه استفاده:</b>\n"
-                f"۱. متن جدول برنامه مطالعاتی که از <b>جمینای (Gemini)</b> گرفته‌اید را کپی کرده و بفرستید.\n"
-                f"۲. نام دانش‌آموز را انتخاب یا تایپ کنید (در سربرگ به صورت <b>برنامه دکتر [نام]</b> درج می‌شود).\n"
-                f"۳. تاریخ شروع (از امروز / از فردا / شنبه آینده) را بزنید تا هم <b>PDF برنامه مطالعاتی</b> و هم در صورت انتخاب، <b>PDF جداگانه وضعیت هفتگی (اینفوگرافیک)</b> در کسری از ثانیه ارسال شود!"
+                f"🚀 <b>مراحل کار (دقیقاً به ترتیب دلخواه شما):</b>\n"
+                f"۱️⃣ ابتدا <b>متن برنامه مطالعاتی جمینای</b> را بفرستید.\n"
+                f"۲️⃣ ربات تعداد روزها را تشخیص می‌دهد و با <b>دکمه شیشه‌ای</b> می‌پرسد <b>برنامه از کی چیده بشه؟</b> (امروز / فردا / شنبه آینده).\n"
+                f"۳️⃣ سپس <b>نام دانش‌آموز</b> را با دکمه‌های شیشه‌ای می‌پرسد و نام فایل را خودکار <b>«برنامه دکتر [نام] - [تاریخ روز اول]»</b> می‌گذارد.\n"
+                f"۴️⃣ در آخر می‌پرسد <b>آیا خروجی دوم (وضعیت هفتگی) را هم می‌خواهید یا خیر</b> و بلافاصله فایل‌ها را تحویل می‌دهد!\n\n"
+                f"👇 <i>منوهای اصلی در پایین صفحه فعال هستند و دکمه‌های هر مرحله نیز به صورت شیشه‌ای زیر پیام‌ها نمایش داده می‌شوند:</i>"
             )
-            self.send_message(chat_id, welcome)
+            self.send_message(
+                chat_id,
+                welcome,
+                reply_markup=self.build_main_reply_keyboard(),
+            )
             return
 
-        if text.startswith("/students"):
-            students = self.db.list_students(limit=20)
-            if not students:
-                self.send_message(chat_id, "📭 هنوز دانش‌آموزی در لیست ذخیره نشده است.")
+        if text == BTN_RESET or text == "/cancel":
+            session["state"] = "IDLE"
+            session["raw_chunks"] = []
+            session["plan_data"] = None
+            session["date_info"] = None
+            self.send_message(
+                chat_id,
+                "🔄 حافظه موقت پاک شد. هر زمان آماده بودید متن برنامه جدید را ارسال کنید.",
+                reply_markup=self.build_main_reply_keyboard(),
+            )
+            return
+
+        if text == BTN_NEW_PLAN:
+            session["state"] = "IDLE"
+            session["raw_chunks"] = []
+            self.send_message(
+                chat_id,
+                "📋 <b>لطفاً متن جدول برنامه مطالعاتی که از جمینای گرفته‌اید را همین‌جا ارسال کنید:</b>",
+                reply_markup=self.build_main_reply_keyboard(),
+            )
+            return
+
+        if text == BTN_STUDENTS or text.startswith("/students"):
+            self._send_students_management_panel(chat_id)
+            return
+
+        if text == BTN_ADD_STUDENT:
+            session["state"] = "ADD_STUDENT_ONLY"
+            self.send_message(
+                chat_id,
+                "👤 <b>نام دانش‌آموز جدید را تایپ و ارسال کنید</b> تا به دکمه‌های شیشه‌ای اضافه شود:",
+                reply_markup=self.build_main_reply_keyboard(),
+            )
+            return
+
+        if text == BTN_RECENT_PLANS:
+            recent = self.db.get_recent_plans(limit=8)
+            if not recent:
+                self.send_message(
+                    chat_id,
+                    "📭 هنوز برنامه‌ای صادر نشده است.",
+                    reply_markup=self.build_main_reply_keyboard(),
+                )
             else:
-                items = "\n".join(f"• {s}" for s in students)
-                self.send_message(chat_id, f"👥 <b>لیست دانش‌آموزان ذخیره‌شده:</b>\n\n{items}")
+                lines = [
+                    f"• <b>{format_doctor_student_title(r['student_name'])}</b> | {r['date_range']} ({to_persian_digits(r['num_days'])} روزه - {to_persian_digits(r['total_hours'])} ساعت)"
+                    for r in recent
+                ]
+                self.send_message(
+                    chat_id,
+                    "📊 <b>آخرین برنامه‌های صادرشده:</b>\n\n" + "\n".join(lines),
+                    reply_markup=self.build_main_reply_keyboard(),
+                )
+            return
+
+        if text == BTN_SETTINGS:
+            sum_icon = "✅ فعال" if session.get("include_summary", True) else "❌ غیرفعال"
+            sync_icon = "✅ فعال" if session.get("sync_weekdays", True) else "❌ غیرفعال"
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": f"جدول خلاصه آخر برنامه: {sum_icon}",
+                            "callback_data": "settings_toggle:summary",
+                        }
+                    ],
+                    [
+                        {
+                            "text": f"تطبیق روز هفته با تقویم: {sync_icon}",
+                            "callback_data": "settings_toggle:sync",
+                        }
+                    ],
+                ]
+            }
+            self.send_message(
+                chat_id,
+                "⚙️ <b>تنظیمات پیش‌فرض ساخت PDF:</b>\nبرای تغییر هر مورد روی دکمه شیشه‌ای آن بزنید:",
+                reply_markup=kb,
+            )
+            return
+
+        # ۲. بررسی وضعیت‌های ورودی متنی
+        if session["state"] == "ADD_STUDENT_ONLY":
+            self.db.add_or_touch_student(text.strip())
+            session["state"] = "IDLE"
+            self.send_message(
+                chat_id,
+                f"✅ دانش‌آموز <b>«{text.strip()}»</b> با موفقیت به لیست دکمه‌های شیشه‌ای اضافه شد!",
+                reply_markup=self.build_main_reply_keyboard(),
+            )
             return
 
         looks_like_plan = ("پارت" in text and "درس" in text) or ("ساعت شروع" in text) or ("روز اول" in text)
 
         if session["state"] in ("IDLE", "WAIT_MORE_TEXT") or (
-            session["state"] == "ASK_STUDENT" and looks_like_plan and len(text) > 80
+            session["state"] == "STEP1_ASK_DATE" and looks_like_plan and len(text) > 80
         ):
             session["raw_chunks"].append(text)
-            self._prompt_student_name(chat_id, session)
+            self._show_step1_ask_date(chat_id, session)
             return
 
-        if session["state"] == "ASK_STUDENT":
-            session["student_name"] = text.strip()
-            self._prompt_date_choice(chat_id, session)
-            return
-
-        if session["state"] == "ASK_CUSTOM_DATE":
+        if session["state"] == "STEP1_ASK_CUSTOM_DATE":
             num_days = session["plan_data"]["summary"]["num_days"]
             custom_text = to_persian_digits(text.strip())
-            date_info = {
+            session["date_info"] = {
                 "num_days": num_days,
                 "short_range": custom_text,
                 "start_full": custom_text,
-                "end_full": "",
+                "end_full": f"برنامه {to_persian_digits(num_days)} روزه",
             }
-            self._finalize_and_send_pdf(chat_id, session, date_info)
+            self._show_step2_ask_student(chat_id, session)
             return
 
+        if session["state"] == "STEP2_ASK_STUDENT":
+            if looks_like_plan and len(text) > 80:
+                session["raw_chunks"] = [text]
+                self._show_step1_ask_date(chat_id, session)
+                return
+            session["student_name"] = text.strip()
+            self.db.add_or_touch_student(text.strip())
+            self._show_step3_ask_second_output(chat_id, session)
+            return
+
+        # اگر در هر حالت دیگری کاربر جدول جدید فرستاد، بلافاصله از مرحله ۱ (پرسیدن تاریخ) شروع کن
         if looks_like_plan:
             session["raw_chunks"] = [text]
-            self._prompt_student_name(chat_id, session)
+            self._show_step1_ask_date(chat_id, session)
         else:
             self.send_message(
                 chat_id,
-                "📋 لطفاً ابتدا متن جدول برنامه مطالعاتی را ارسال کنید.",
+                "📋 لطفاً ابتدا متن جدول برنامه مطالعاتی جمینای را ارسال کنید (یا از دکمه‌های منوی پایین صفحه استفاده نمایید).",
+                reply_markup=self.build_main_reply_keyboard(),
             )
+
+    # -------------------------------------------------------------------------
+    # پردازش کلیک روی دکمه‌های شیشه‌ای (Callback Queries)
+    # -------------------------------------------------------------------------
 
     def handle_callback(self, callback: dict) -> None:
         cb_id = callback["id"]
@@ -441,7 +717,23 @@ class TelegramStudyPlanBot:
             session["state"] = "IDLE"
             session["raw_chunks"] = []
             session["plan_data"] = None
-            self.send_message(chat_id, "🔄 عملیات لغو شد. هر زمان آماده بودید متن برنامه جدید را بفرستید.")
+            session["date_info"] = None
+            if msg_id:
+                self.edit_message_text(
+                    chat_id,
+                    msg_id,
+                    "🔄 عملیات لغو شد. هر زمان آماده بودید متن برنامه جدید را بفرستید.",
+                )
+            return
+
+        if data == "act:new_plan_prompt":
+            session["state"] = "IDLE"
+            session["raw_chunks"] = []
+            self.send_message(
+                chat_id,
+                "📋 <b>لطفاً متن جدول برنامه مطالعاتی جدید را ارسال کنید:</b>",
+                reply_markup=self.build_main_reply_keyboard(),
+            )
             return
 
         if data == "act:append_more":
@@ -449,39 +741,76 @@ class TelegramStudyPlanBot:
             self.send_message(
                 chat_id,
                 "➕ <b>لطفاً بخش بعدی متن جدول را ارسال کنید</b> تا به روزهای قبلی اضافه شود:",
+                reply_markup=self.build_main_reply_keyboard(),
             )
             return
 
-        if data == "act:back_student":
-            self._prompt_student_name(chat_id, session)
+        if data == "act:add_student_only":
+            session["state"] = "ADD_STUDENT_ONLY"
+            self.send_message(
+                chat_id,
+                "👤 <b>نام دانش‌آموز جدید را تایپ و ارسال کنید:</b>",
+                reply_markup=self.build_main_reply_keyboard(),
+            )
             return
 
-        if data.startswith("stuid:"):
+        if data.startswith("delstu:"):
             stu_id = int(data.split(":", 1)[1])
-            student_name = self.db.get_student_by_id(stu_id) or "دانش‌آموز"
-            session["student_name"] = student_name
-            self._prompt_date_choice(chat_id, session)
+            deleted = self.db.delete_student_by_id(stu_id)
+            if deleted:
+                self._send_students_management_panel(chat_id, edit_msg_id=msg_id)
             return
 
-        if data in ("toggle:weekly_status", "toggle:summary", "toggle:sync"):
-            if data == "toggle:weekly_status":
-                session["send_weekly_status_pdf"] = not session.get(
-                    "send_weekly_status_pdf", True
-                )
-            elif data == "toggle:summary":
+        if data.startswith("settings_toggle:"):
+            key = data.split(":", 1)[1]
+            if key == "summary":
                 session["include_summary"] = not session.get("include_summary", True)
-            elif data == "toggle:sync":
+            elif key == "sync":
                 session["sync_weekdays"] = not session.get("sync_weekdays", True)
-
+            sum_icon = "✅ فعال" if session.get("include_summary", True) else "❌ غیرفعال"
+            sync_icon = "✅ فعال" if session.get("sync_weekdays", True) else "❌ غیرفعال"
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": f"جدول خلاصه آخر برنامه: {sum_icon}",
+                            "callback_data": "settings_toggle:summary",
+                        }
+                    ],
+                    [
+                        {
+                            "text": f"تطبیق روز هفته با تقویم: {sync_icon}",
+                            "callback_data": "settings_toggle:sync",
+                        }
+                    ],
+                ]
+            }
             if msg_id:
-                self.edit_message_reply_markup(
-                    chat_id, msg_id, self._build_date_selection_keyboard(session)
+                self.edit_message_text(
+                    chat_id,
+                    msg_id,
+                    "⚙️ <b>تنظیمات پیش‌فرض ساخت PDF:</b>\nبرای تغییر هر مورد روی دکمه شیشه‌ای آن بزنید:",
+                    reply_markup=kb,
                 )
-            else:
-                self._prompt_date_choice(chat_id, session)
             return
 
-        if data.startswith("date:"):
+        # دکمه‌های بازگشت (Back Buttons) بین مراحل
+        if data == "back:to_step1":
+            if not session.get("plan_data"):
+                self.send_message(chat_id, "⚠️ ابتدا متن برنامه را ارسال کنید.")
+                return
+            self._show_step1_ask_date(chat_id, session, edit_msg_id=msg_id)
+            return
+
+        if data == "back:to_step2":
+            if not session.get("plan_data") or not session.get("date_info"):
+                self.send_message(chat_id, "⚠️ ابتدا متن برنامه را ارسال کنید.")
+                return
+            self._show_step2_ask_student(chat_id, session, edit_msg_id=msg_id)
+            return
+
+        # مرحله ۱ -> انتخاب تاریخ و رفتن به مرحله ۲ (انتخاب دانش‌آموز)
+        if data.startswith("step1_date:"):
             if not session.get("plan_data"):
                 self.send_message(chat_id, "⚠️ ابتدا متن برنامه را ارسال کنید.")
                 return
@@ -490,26 +819,72 @@ class TelegramStudyPlanBot:
             today = get_tehran_today()
 
             if choice == "today":
-                date_info = compute_plan_date_range(today, num_days)
-                self._finalize_and_send_pdf(chat_id, session, date_info)
+                session["date_info"] = compute_plan_date_range(today, num_days)
+                self._show_step2_ask_student(chat_id, session, edit_msg_id=msg_id)
             elif choice == "tomorrow":
                 tmrw = today + datetime.timedelta(days=1)
-                date_info = compute_plan_date_range(tmrw, num_days)
-                self._finalize_and_send_pdf(chat_id, session, date_info)
+                session["date_info"] = compute_plan_date_range(tmrw, num_days)
+                self._show_step2_ask_student(chat_id, session, edit_msg_id=msg_id)
             elif choice == "saturday":
                 sat = get_next_saturday(today)
-                date_info = compute_plan_date_range(sat, num_days)
-                self._finalize_and_send_pdf(chat_id, session, date_info)
+                session["date_info"] = compute_plan_date_range(sat, num_days)
+                self._show_step2_ask_student(chat_id, session, edit_msg_id=msg_id)
             elif choice == "custom":
-                session["state"] = "ASK_CUSTOM_DATE"
-                self.send_message(
-                    chat_id,
-                    "✏️ <b>لطفاً بازه تاریخ مورد نظر خود را تایپ کنید:</b>\n"
-                    "<i>مثال: دوشنبه ۴ آبان تا یکشنبه ۱۰ آبان</i>",
-                )
+                session["state"] = "STEP1_ASK_CUSTOM_DATE"
+                back_kb = {
+                    "inline_keyboard": [
+                        [{"text": "🔙 بازگشت به انتخاب تاریخ", "callback_data": "back:to_step1"}]
+                    ]
+                }
+                if msg_id:
+                    self.edit_message_text(
+                        chat_id,
+                        msg_id,
+                        "✏️ <b>لطفاً بازه تاریخ یا تاریخ شروع مورد نظر خود را تایپ کنید:</b>\n"
+                        "<i>مثال: دوشنبه ۴ آبان تا یکشنبه ۱۰ آبان</i>",
+                        reply_markup=back_kb,
+                    )
+                else:
+                    self.send_message(
+                        chat_id,
+                        "✏️ <b>لطفاً بازه تاریخ یا تاریخ شروع مورد نظر خود را تایپ کنید:</b>\n"
+                        "<i>مثال: دوشنبه ۴ آبان تا یکشنبه ۱۰ آبان</i>",
+                        reply_markup=back_kb,
+                    )
+            return
+
+        # مرحله ۲ -> انتخاب دانش‌آموز از دکمه شیشه‌ای و رفتن به مرحله ۳ (پرسیدن خروجی دوم)
+        if data.startswith("step2_stu:"):
+            if not session.get("plan_data") or not session.get("date_info"):
+                self.send_message(chat_id, "⚠️ ابتدا متن برنامه را ارسال کنید.")
+                return
+            stu_id = int(data.split(":", 1)[1])
+            student_name = self.db.get_student_by_id(stu_id) or "دانش‌آموز"
+            session["student_name"] = student_name
+            self._show_step3_ask_second_output(chat_id, session, edit_msg_id=msg_id)
+            return
+
+        # تغییر تیک‌های فرعی در مرحله ۳
+        if data in ("toggle:summary", "toggle:sync"):
+            if data == "toggle:summary":
+                session["include_summary"] = not session.get("include_summary", True)
+            elif data == "toggle:sync":
+                session["sync_weekdays"] = not session.get("sync_weekdays", True)
+            self._show_step3_ask_second_output(chat_id, session, edit_msg_id=msg_id)
+            return
+
+        # مرحله ۳ -> پاسخ به «آیا خروجی دوم (وضعیت هفتگی) را هم می‌خواهی یا فقط اولی کافیه؟»
+        if data.startswith("step3_out:"):
+            if not session.get("plan_data") or not session.get("date_info"):
+                self.send_message(chat_id, "⚠️ ابتدا متن برنامه را ارسال کنید.")
+                return
+            mode = data.split(":", 1)[1]
+            want_both = mode == "both"
+            self._finalize_and_send_pdfs(chat_id, session, want_status_pdf=want_both)
+            return
 
     def run_polling(self) -> None:
-        logger.info("Starting @DRpdfmakerbot v2 polling loop...")
+        logger.info("Starting @DRpdfmakerbot v3 polling loop...")
         offset = 0
         while True:
             try:

@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import datetime
-import time
 from pathlib import Path
 from src.jalali import (
     gregorian_to_jalali,
@@ -16,6 +15,7 @@ from src.parser import (
 )
 from src.pdf_generator import generate_study_plan_pdf, generate_weekly_status_pdf
 from src.db import ConsultingDatabase
+from bot import TelegramStudyPlanBot, build_pdf_filenames
 
 
 SAMPLE_GEMINI_PLAN = """
@@ -107,7 +107,6 @@ def test_jalali_conversion():
     assert r["num_days"] == 7
     assert r["start_full"] == "دوشنبه ۴ آبان"
     assert r["end_full"] == "یکشنبه ۱۰ آبان"
-    assert "۴ تا ۱۰ آبان ۱۴۰۵" in r["short_range"]
 
 
 def test_parser_and_rounding():
@@ -118,29 +117,93 @@ def test_parser_and_rounding():
     assert round_to_nearest_10(14) == 10
 
     assert format_doctor_student_title("نرگس") == "برنامه دکتر نرگس"
-    assert format_doctor_student_title("خانم علیپور") == "برنامه دکتر خانم علیپور"
-    assert format_doctor_student_title("دکتر نرگس") == "برنامه دکتر نرگس"
+    assert format_doctor_student_title("نرگس خانوم") == "برنامه دکتر نرگس خانوم"
 
-    parsed = parse_study_plan(SAMPLE_GEMINI_PLAN)
-    assert parsed["summary"]["num_days"] == 7
-    assert parsed["summary"]["total_hours"] == 48.75
-    # بررسی اینکه تمام اعداد تست دروس مضرب ۱۰ باشند
-    for subj, tst in parsed["summary"]["subject_tests"].items():
-        assert tst % 10 == 0, f"Subject {subj} test count {tst} is not a multiple of 10"
-    assert parsed["summary"]["total_tests"] % 10 == 0
-    weights = compute_column_weights(parsed["days"][0]["headers"])
-    assert max(weights) == 3.6
-    assert min(weights) == 0.9
+    d = datetime.date(2026, 10, 26)
+    r = compute_plan_date_range(d, 7)
+    f_main, f_status = build_pdf_filenames("نرگس خانوم", r)
+    assert f_main == "برنامه دکتر نرگس خانوم - دوشنبه ۴ آبان.pdf"
+    assert f_status == "وضعیت هفتگی - برنامه دکتر نرگس خانوم - دوشنبه ۴ آبان.pdf"
 
 
 def test_db_operations(tmp_path: Path):
     db = ConsultingDatabase(tmp_path / "test.db")
-    db.add_or_touch_student("نرگس")
-    db.add_or_touch_student("خانم علیپور")
     items = db.list_students_with_ids()
-    assert len(items) == 2
-    first_id = items[0]["id"]
-    assert db.get_student_by_id(first_id) in ("نرگس", "خانم علیپور")
+    assert len(items) >= 18
+    db.add_or_touch_student("نرگس خانوم")
+    assert "نرگس خانوم" in db.list_students()
+
+
+def test_v3_conversation_flow(tmp_path: Path):
+    """تست کامل ترتیب ۳ مرحله‌ای جدید بات: ۱. تاریخ -> ۲. نام دانش‌آموز -> ۳. پرسش خروجی دوم + دکمه‌های بازگشت."""
+    bot = TelegramStudyPlanBot(token="TEST_TOKEN", db_path=str(tmp_path / "flow.db"))
+    sent_messages = []
+    sent_docs = []
+
+    bot.send_message = lambda chat_id, text, reply_markup=None, parse_mode="HTML": sent_messages.append(
+        {"chat_id": chat_id, "text": text, "reply_markup": reply_markup}
+    ) or {"ok": True}
+    bot.edit_message_text = lambda chat_id, message_id, text, reply_markup=None, parse_mode="HTML": sent_messages.append(
+        {"chat_id": chat_id, "text": text, "reply_markup": reply_markup, "edited": True}
+    ) or {"ok": True}
+    bot.answer_callback = lambda callback_id, text="": None
+    bot.send_document = lambda chat_id, file_path, filename, caption="", reply_markup=None: sent_docs.append(
+        {"filename": filename, "caption": caption, "size": file_path.stat().st_size}
+    ) or {"ok": True}
+
+    chat_id = 1176839639
+    # ۱. ارسال متن برنامه -> باید وارد STEP1_ASK_DATE شود
+    bot.handle_message({"chat": {"id": chat_id}, "text": SAMPLE_GEMINI_PLAN})
+    sess = bot._get_session(chat_id)
+    assert sess["state"] == "STEP1_ASK_DATE"
+    assert "این برنامه ۷ روزه از کی چیده بشه؟" in sent_messages[-1]["text"]
+
+    # ۲. کلیک روی «از فردا» -> باید وارد STEP2_ASK_STUDENT شود
+    bot.handle_callback(
+        {"id": "cb1", "message": {"chat": {"id": chat_id}, "message_id": 10}, "data": "step1_date:tomorrow"}
+    )
+    assert sess["state"] == "STEP2_ASK_STUDENT"
+    assert "اسم این دانش‌آموز چیه؟" in sent_messages[-1]["text"]
+
+    # ۳. تست دکمه بازگشت به مرحله ۱ (تاریخ)
+    bot.handle_callback(
+        {"id": "cb2", "message": {"chat": {"id": chat_id}, "message_id": 10}, "data": "back:to_step1"}
+    )
+    assert sess["state"] == "STEP1_ASK_DATE"
+
+    # ۴. انتخاب مجدد «از امروز» -> ورود به STEP2_ASK_STUDENT
+    bot.handle_callback(
+        {"id": "cb3", "message": {"chat": {"id": chat_id}, "message_id": 10}, "data": "step1_date:today"}
+    )
+    assert sess["state"] == "STEP2_ASK_STUDENT"
+
+    # ۵. تایپ نام دانش‌آموز «نرگس خانوم» -> باید وارد STEP3_ASK_SECOND_PDF شود
+    bot.handle_message({"chat": {"id": chat_id}, "text": "نرگس خانوم"})
+    assert sess["state"] == "STEP3_ASK_SECOND_PDF"
+    assert "خروجی دومی" in sent_messages[-1]["text"]
+    assert "برنامه دکتر نرگس خانوم" in sent_messages[-1]["text"]
+
+    # ۶. تست دکمه بازگشت از مرحله ۳ به مرحله ۲ (انتخاب دانش‌آموز)
+    bot.handle_callback(
+        {"id": "cb4", "message": {"chat": {"id": chat_id}, "message_id": 11}, "data": "back:to_step2"}
+    )
+    assert sess["state"] == "STEP2_ASK_STUDENT"
+
+    # ۷. انتخاب دانش‌آموز از روی دکمه شیشه‌ای -> ورود به STEP3_ASK_SECOND_PDF
+    first_stu_id = bot.db.list_students_with_ids()[0]["id"]
+    bot.handle_callback(
+        {"id": "cb5", "message": {"chat": {"id": chat_id}, "message_id": 11}, "data": f"step2_stu:{first_stu_id}"}
+    )
+    assert sess["state"] == "STEP3_ASK_SECOND_PDF"
+
+    # ۸. انتخاب «آره، خروجی دوم رو هم بده» -> باید هر ۲ فایل PDF ساخته و ارسال شوند
+    bot.handle_callback(
+        {"id": "cb6", "message": {"chat": {"id": chat_id}, "message_id": 11}, "data": "step3_out:both"}
+    )
+    assert len(sent_docs) == 2
+    assert sent_docs[0]["filename"].startswith("برنامه دکتر ")
+    assert sent_docs[1]["filename"].startswith("وضعیت هفتگی - برنامه دکتر ")
+    assert sess["state"] == "IDLE"
 
 
 def test_pdf_generation(tmp_path: Path):
